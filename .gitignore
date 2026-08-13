@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.env
+venv/
+.venv/
+data/raw/*.pdf
+data/processed/chroma/
+data/processed/llm_cache/
+data/processed/bm25.pkl
+eval/results/*.json
+!eval/results/.gitkeep
+.pytest_cache/

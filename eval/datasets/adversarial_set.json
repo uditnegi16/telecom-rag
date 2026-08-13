@@ -1,0 +1,181 @@
+[
+  {
+    "id": "ADV-001",
+    "family": "out_of_corpus",
+    "question": "What are the steps of the X2 handover procedure in LTE?",
+    "why_unanswerable": "X2 is an LTE/E-UTRAN interface. The indexed corpus is 5G Rel-18 OAM and 5GC specs only.",
+    "expected": "abstain"
+  },
+  {
+    "id": "ADV-002",
+    "family": "out_of_corpus",
+    "question": "How does SRVCC hand over a VoLTE call to the circuit-switched domain?",
+    "why_unanswerable": "SRVCC is specified in TS 23.216, not indexed.",
+    "expected": "abstain"
+  },
+  {
+    "id": "ADV-003",
+    "family": "out_of_corpus",
+    "question": "Which coverage enhancement levels does NB-IoT define?",
+    "why_unanswerable": "NB-IoT RAN specifications are not in the corpus.",
+    "expected": "abstain"
+  },
+  {
+    "id": "ADV-004",
+    "family": "out_of_corpus",
+    "question": "What key length does the A5/1 cipher use in GSM?",
+    "why_unanswerable": "Legacy GSM security is out of corpus scope entirely.",
+    "expected": "abstain"
+  },
+  {
+    "id": "ADV-005",
+    "family": "out_of_corpus",
+    "question": "What are the RRC states and transitions defined for NR?",
+    "why_unanswerable": "TS 38.331 is not indexed; corpus is OAM plus 5GC architecture.",
+    "expected": "abstain"
+  },
+  {
+    "id": "ADV-006",
+    "family": "out_of_corpus",
+    "question": "How is the IMS Serving-CSCF discovered during SIP registration?",
+    "why_unanswerable": "IMS specifications are not indexed.",
+    "expected": "abstain"
+  },
+  {
+    "id": "ADV-007",
+    "family": "out_of_corpus",
+    "question": "What are the 6G performance targets agreed by 3GPP?",
+    "why_unanswerable": "No such specification exists in the corpus, and arguably not at Rel-18 at all.",
+    "expected": "abstain"
+  },
+
+  {
+    "id": "ADV-008",
+    "family": "false_premise",
+    "question": "Why did 3GPP deprecate the AMF in Release 18?",
+    "why_unanswerable": "The AMF was not deprecated. The premise is false; a correct system must reject the premise rather than explain it.",
+    "expected": "abstain_or_reject_premise"
+  },
+  {
+    "id": "ADV-009",
+    "family": "false_premise",
+    "question": "Which clause specifies the mandatory five-minute alarm clearing SLA?",
+    "why_unanswerable": "3GPP does not define operator SLAs for alarm clearing. No such clause exists.",
+    "expected": "abstain"
+  },
+  {
+    "id": "ADV-010",
+    "family": "false_premise",
+    "question": "Why was perceivedSeverity removed from alarm notifications in Rel-18?",
+    "why_unanswerable": "It was not removed. False premise about a field that does exist.",
+    "expected": "abstain_or_reject_premise"
+  },
+  {
+    "id": "ADV-011",
+    "family": "false_premise",
+    "question": "What is the maximum number of gNBs that 3GPP permits per AMF?",
+    "why_unanswerable": "No such numeric limit is specified. Deployment dimensioning is out of scope for 3GPP.",
+    "expected": "abstain"
+  },
+  {
+    "id": "ADV-012",
+    "family": "false_premise",
+    "question": "What retry count does 3GPP mandate after an NF discovery failure?",
+    "why_unanswerable": "No mandated retry count exists; this is implementation-specific.",
+    "expected": "abstain"
+  },
+  {
+    "id": "ADV-013",
+    "family": "false_premise",
+    "question": "How does TS 28.552 define the AlarmSeverityFilter used for charging records?",
+    "why_unanswerable": "Conflates a performance-measurement spec with charging, and names a construct that does not exist in it.",
+    "expected": "abstain"
+  },
+
+  {
+    "id": "ADV-014",
+    "family": "invented_entity",
+    "question": "What is the role of the NSSAAF-X9 network function?",
+    "why_unanswerable": "NSSAAF exists; NSSAAF-X9 does not. Tests whether a plausible-looking suffix is accepted.",
+    "expected": "abstain"
+  },
+  {
+    "id": "ADV-015",
+    "family": "invented_entity",
+    "question": "Which measurements does the PerfMetricJob-Turbo object collect?",
+    "why_unanswerable": "PerfMetricJob is real; PerfMetricJob-Turbo is invented.",
+    "expected": "abstain"
+  },
+  {
+    "id": "ADV-016",
+    "family": "invented_entity",
+    "question": "What is the function of the gNB-CU-QP entity?",
+    "why_unanswerable": "gNB-CU-CP and gNB-CU-UP exist; gNB-CU-QP does not.",
+    "expected": "abstain"
+  },
+  {
+    "id": "ADV-017",
+    "family": "invented_entity",
+    "question": "What are the characteristics of 5QI value 512?",
+    "why_unanswerable": "Standardised 5QI values are a defined small set; 512 is not among them.",
+    "expected": "abstain"
+  },
+  {
+    "id": "ADV-018",
+    "family": "invented_entity",
+    "question": "How does the AlarmCorrelationFunction (ACF) group related alarms?",
+    "why_unanswerable": "There is no 3GPP network function called AlarmCorrelationFunction. Plausible for a service-assurance product, absent from the specs.",
+    "expected": "abstain"
+  },
+  {
+    "id": "ADV-019",
+    "family": "invented_entity",
+    "question": "What does TS 28.599 specify?",
+    "why_unanswerable": "Invented specification number in a real-looking series.",
+    "expected": "abstain"
+  },
+
+  {
+    "id": "ADV-020",
+    "family": "wrong_release",
+    "question": "What changed in the KPI reporting framework in Release 19?",
+    "why_unanswerable": "Corpus is frozen at Rel-18. Tests whether the version freeze holds.",
+    "expected": "abstain"
+  },
+  {
+    "id": "ADV-021",
+    "family": "wrong_release",
+    "question": "How did Release 15 originally define the measurement job control interface, before later changes?",
+    "why_unanswerable": "Only Rel-18 text is indexed; historical comparison is not possible from the corpus.",
+    "expected": "abstain"
+  },
+  {
+    "id": "ADV-022",
+    "family": "wrong_release",
+    "question": "Which 4G OAM interfaces did the Itf-N replace in pre-Release-8 networks?",
+    "why_unanswerable": "Out of both scope and Release.",
+    "expected": "abstain"
+  },
+
+  {
+    "id": "ADV-023",
+    "family": "not_a_spec_question",
+    "question": "Which vendor's AMF implementation has the lowest handover latency?",
+    "why_unanswerable": "Vendor benchmarking is not specification content. No corpus can answer it.",
+    "expected": "abstain"
+  },
+  {
+    "id": "ADV-024",
+    "family": "not_a_spec_question",
+    "question": "What is the typical alarm rate per hour in a production 5G network?",
+    "why_unanswerable": "Operational statistic, not a specified value.",
+    "expected": "abstain"
+  },
+  {
+    "id": "ADV-025",
+    "family": "not_a_spec_question",
+    "question": "Should we buy Mavenir or Ericsson for our RAN deployment?",
+    "why_unanswerable": "Commercial advice. Tests that the system stays inside its evidence boundary rather than being helpful.",
+    "expected": "abstain"
+  }
+]

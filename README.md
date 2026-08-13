@@ -1,0 +1,227 @@
+# TelecomRAG — grounded question answering over 3GPP specifications
+
+A retrieval-augmented assistant for 3GPP telecom specifications, built so that
+**every claim it makes is traceable to a clause**, and so that it **refuses
+rather than guesses** when the corpus does not contain the answer.
+
+Submitted for the Mavenir Graduate Engineer Trainee (AI/LLM Engineer, MavAI
+OPS) technical assignment.
+
+> **On "zero hallucination".** This system does not claim zero hallucination,
+> and I do not believe that is provable for a generative model over open-ended
+> input. It claims something narrower and verifiable: **fail-closed and
+> auditable.** Every claim carries a clause citation that a human can falsify
+> in seconds, and anything unsupported becomes a refusal instead of a guess.
+> The measured numbers are below, alongside the false-refusal cost of getting
+> them.
+
+---
+
+## Results
+
+| Metric | Baseline | Final | Target |
+|---|---|---|---|
+| Ungrounded-claim rate (answerable, N=__) | | | < 5% |
+| Abstention correctness (adversarial, N=25) | | | > 90% |
+| Unsupported-answer rate (adversarial) | | | < 10% |
+| False-refusal rate (answerable) | | | < 15% |
+| Citation accuracy | | | > 90% |
+| Recall@10 | | | > 0.85 |
+| p95 latency (CPU) | | | < 6 s |
+
+### Ablation — what each change actually bought
+
+| Run | Change | Recall@10 | Ungrounded ↓ | Abstain ✓ | False refuse ↓ |
+|---|---|---|---|---|---|
+| 001 | Baseline: fixed-size chunks, dense-only, plain prompt | | | | |
+| 002 | + clause-aware chunking | | | | |
+| 003 | + BM25 hybrid + RRF | | | | |
+| 004 | + cross-encoder rerank | | | | |
+| 005 | + per-claim citation prompt | | | | |
+| 006 | + abstention gate (τ swept) | | | | |
+| 007 | + entailment verifier | | | | |
+
+Full per-run detail, including reverted experiments, in
+[`docs/OUTCOMES_LOG.md`](docs/OUTCOMES_LOG.md).
+
+---
+
+## How it works
+
+```
+3GPP PDFs → clause-aware chunker → ┬→ bge-small embeddings → ChromaDB
+                                   └→ BM25 index
+
+query → dense + BM25 → RRF → cross-encoder rerank → τ gate ──low──→ ABSTAIN
+                                                       │
+                                                    generate (JSON, per-claim
+                                                       │       citations)
+                                          citation validation ──bad──→ ABSTAIN
+                                                       │
+                                          entailment verification ──all──→ ABSTAIN
+                                                       │
+                                        answer + surviving claims + clauses
+```
+
+Five paths end in abstention. None emit an unverified claim. Detail in
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+
+### Why each part exists
+
+| Component | The hallucination it prevents |
+|---|---|
+| Clause-aware chunking | A definition split mid-sentence, which the model then completes from memory |
+| BM25 alongside embeddings | Dense retrieval misses exact identifiers — `TS 28.552`, `5QI`, `gNB-CU-UP`, `perceivedSeverity` |
+| Cross-encoder reranking | Right clause retrieved but ranked outside the window the model sees |
+| **Abstention gate** | The corpus has no answer — removes the *opportunity* to invent |
+| Citation validation | Fabricated clause and specification numbers |
+| **Entailment verification** | Retrieval was correct but the generation embellished |
+
+---
+
+## Corpus
+
+Ten Rel-18 specifications, weighted toward fault management, KPIs and OAM
+because that is the domain MavAI OPS operates in — TS 28.545/28.546 (fault
+supervision), 28.552/28.554 (performance measurements and E2E KPIs),
+28.532/28.533 (management services and architecture), 23.501/23.502 (5GS
+architecture and procedures), 32.111-2 (alarm IRP), TR 21.905 (vocabulary).
+
+Exact versions in [`docs/CORPUS_MANIFEST.md`](docs/CORPUS_MANIFEST.md).
+The Release is frozen: mixing Releases makes two contradictory versions of the
+same clause retrievable at once, which no retriever can resolve.
+
+---
+
+## Evaluation
+
+Two datasets, deliberately separate:
+
+- **Golden set** — answerable questions with gold clause IDs. Drafted by LLM
+  from real chunks, then **every item read and corrected by hand**. Measures
+  whether the system answers and cites correctly.
+- **Adversarial set** — 25 hand-written unanswerable questions across five
+  families: out-of-corpus, false premise, invented entity, wrong Release, and
+  not-a-spec-question. Correct behaviour is refusal; any confident answer is a
+  hallucination.
+
+**The adversarial set is what makes the hallucination claim meaningful.** A
+system tested only on answerable questions cannot demonstrate that it abstains.
+
+Abstention is reported per family, because the families are caught by different
+mechanisms: `invented_entity` is stopped by the relevance gate, while
+`false_premise` often retrieves genuinely relevant text with a high score and
+must be caught by the entailment verifier instead. A single aggregate number
+would hide which mechanism is doing the work.
+
+Judge validation: 20 verifier decisions were hand-labelled and agreement is
+reported — an LLM evaluator can hallucinate too.
+
+Method and metric definitions: [`docs/EVALUATION_PLAN.md`](docs/EVALUATION_PLAN.md).
+
+---
+
+## Running it
+
+```bash
+cp .env.example .env          # add your GROQ_API_KEY
+make install
+
+# 1. put spec PDFs in data/raw/  — see scripts/CORPUS.md
+make inspect                   # gate G2: READ the sampled chunks
+make ingest                    # build dense + BM25 indices
+
+# 2. evaluate
+make smoke                     # 15 questions, fast iteration
+make eval RUN=007 NOTE="verifier on"
+make sweep                     # τ operating-point sweep
+
+# 3. serve
+make api                       # FastAPI on :8000
+make ui                        # Streamlit on :8501
+make up                        # both, in Docker
+```
+
+Runs on CPU. No GPU required.
+
+---
+
+## Engineering process
+
+The assignment is graded on understanding of the design, so the process is
+documented rather than implied.
+
+| Document | What it holds |
+|---|---|
+| [`docs/SDLC.md`](docs/SDLC.md) | Lifecycle model, phases, gates, and why a hybrid V-model/eval-driven spiral was chosen over waterfall or pure MLOps |
+| [`docs/REQUIREMENTS.md`](docs/REQUIREMENTS.md) | 12 functional, 9 non-functional, 5 explicit non-goals, each with an acceptance criterion |
+| [`docs/TRACEABILITY.md`](docs/TRACEABILITY.md) | Requirement → decision → module → test → metric, both directions |
+| [`docs/DECISION_LOG.md`](docs/DECISION_LOG.md) | 20 decisions with the alternatives rejected and why |
+| [`docs/ERROR_LOG.md`](docs/ERROR_LOG.md) | Failures hit during the build, with root causes |
+| [`docs/OUTCOMES_LOG.md`](docs/OUTCOMES_LOG.md) | Every eval run, including reverted experiments |
+| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Component justification and known limitations |
+| [`docs/REUSE_AUDIT.md`](docs/REUSE_AUDIT.md) | Build-vs-reuse analysis |
+
+The governing rule: **the evaluation harness was built before the system was
+optimised.** Without a baseline measured first, no change can be attributed and
+the ablation table above would not exist.
+
+---
+
+## Reuse disclosure
+
+Ingestion scaffolding, the FastAPI layer, the cross-encoder reranker, the
+response cache, the prompt-injection sanitizer, the query logger, and the
+Docker/CI configuration were adapted from a prior personal project
+(`production-rag`).
+
+Written new for this assignment: the 3GPP clause-aware chunker, hybrid
+lexical+dense retrieval with RRF, the rate-limit-aware Groq client, the
+citation validator, the claim-level entailment verifier, the abstention gate
+redesign, the LangGraph answer pipeline, and both evaluation datasets.
+
+Six defects in the reused code were found and fixed during the reuse audit;
+they are documented as DEF-01…DEF-06 in
+[`docs/TRACEABILITY.md`](docs/TRACEABILITY.md). Two are worth naming here
+because they shaped the design:
+
+- **DEF-01** — on an unresolvable citation the old code silently substituted
+  the top-ranked chunk, returning a real passage under a fabricated citation
+  and causing the grounding check to score against a passage that was never
+  cited. Unresolvable citations are now a hard failure.
+- **DEF-02** — the old hallucination check was bag-of-words overlap. On
+  specification text this cannot distinguish a claim from its negation, since
+  "shall reject" and "shall not reject" share ~95% of their tokens. Replaced
+  with claim-level entailment.
+
+---
+
+## Limitations
+
+Stated here rather than left to be discovered.
+
+1. **Single-hop retrieval.** Cross-spec comparison questions need evidence from
+   two clauses; the system does not decompose questions. The `cross_spec`
+   category scores worst.
+2. **Table extraction.** Large 3GPP measurement tables extract imperfectly from
+   PDF. Affected chunks are tagged `content_type: table` so the impact is
+   measurable, not silently absorbed.
+3. **The verifier is itself an LLM** and can err. Judge–human agreement is
+   reported for this reason.
+4. **τ is tuned on this corpus** and does not transfer without re-sweeping.
+5. **Ten specifications is a small corpus.** Whether retrieval precision holds
+   at 100 specs is untested and I would not claim it does.
+
+---
+
+## Stack
+
+Python 3.12 · PyMuPDF · `bge-small-en-v1.5` · ChromaDB · `rank_bm25` ·
+`ms-marco-MiniLM-L-6-v2` cross-encoder · Groq (`llama-3.3-70b-versatile`
+generation, `llama-3.1-8b-instant` verification) · LangGraph · FastAPI ·
+Streamlit · Docker · pytest
+
+Runs entirely on CPU. The LLM layer sits behind a provider interface, so the
+stack can be pointed at a local model for air-gapped on-premises deployment —
+which matters for operators who cannot send network telemetry to a third-party
+API.

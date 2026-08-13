@@ -1,0 +1,196 @@
+"""
+Token-budget-aware Groq client.
+
+WHY THIS MODULE EXISTS (traceability: NFR-01; decisions D-011, D-018, D-019)
+---------------------------------------------------------------------------
+Groq's free tier binds on TOKENS PER MINUTE (~6,000), not requests. At 3
+chunks x ~450 tokens plus prompt, a single RAG call costs ~1,700 tokens, so
+the ceiling is roughly 3 queries/minute. A naive eval loop over 85 questions
+with a verifier pass would spend most of its wall clock in 429 backoff.
+
+Three mitigations, all implemented here:
+  1. On-disk response cache keyed by hash(model + prompt + params). Re-running
+     an unchanged config costs ZERO tokens. This is what makes iterating on
+     one component at a time affordable.
+  2. A local token-bucket that paces requests BEFORE sending, so we mostly
+     avoid 429s instead of reacting to them.
+  3. Reactive backoff that reads Groq's rate-limit response headers
+     (x-ratelimit-remaining-tokens, retry-after) rather than guessing.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import time
+from collections import deque
+from pathlib import Path
+from typing import Optional
+
+from groq import Groq
+
+from app.config import CFG
+
+
+class TokenBucket:
+    """Sliding-window pacer for both tokens/min and requests/min."""
+
+    def __init__(self, tokens_per_min: int, requests_per_min: int):
+        self.tpm = tokens_per_min
+        self.rpm = requests_per_min
+        self._events: deque = deque()   # (timestamp, tokens)
+
+    def _prune(self, now: float) -> None:
+        while self._events and now - self._events[0][0] > 60.0:
+            self._events.popleft()
+
+    def acquire(self, estimated_tokens: int) -> float:
+        """Block until sending `estimated_tokens` fits the window.
+        Returns seconds waited (recorded in run stats)."""
+        waited = 0.0
+        while True:
+            now = time.time()
+            self._prune(now)
+            used = sum(t for _, t in self._events)
+            if used + estimated_tokens <= self.tpm and len(self._events) < self.rpm:
+                self._events.append((now, estimated_tokens))
+                return waited
+            oldest = self._events[0][0] if self._events else now
+            sleep_for = max(0.5, 60.0 - (now - oldest) + 0.25)
+            time.sleep(sleep_for)
+            waited += sleep_for
+
+
+class ResponseCache:
+    """Content-addressed on-disk cache. Deterministic because temperature=0."""
+
+    def __init__(self, directory: str):
+        self.dir = Path(directory)
+        self.dir.mkdir(parents=True, exist_ok=True)
+        self.hits = 0
+        self.misses = 0
+
+    @staticmethod
+    def key(model: str, prompt: str, **params) -> str:
+        blob = json.dumps(
+            {"model": model, "prompt": prompt, **params}, sort_keys=True
+        ).encode()
+        return hashlib.sha256(blob).hexdigest()
+
+    def get(self, key: str) -> Optional[str]:
+        path = self.dir / f"{key}.json"
+        if path.exists():
+            self.hits += 1
+            return json.loads(path.read_text())["response"]
+        self.misses += 1
+        return None
+
+    def put(self, key: str, response: str) -> None:
+        (self.dir / f"{key}.json").write_text(json.dumps({"response": response}))
+
+    def stats(self) -> dict:
+        total = self.hits + self.misses
+        return {
+            "hits": self.hits,
+            "misses": self.misses,
+            "hit_rate": round(self.hits / total, 3) if total else 0.0,
+        }
+
+
+class GroqLLM:
+    """Thin wrapper. Deliberately provider-shaped so a local Ollama backend can
+    be dropped in for the air-gapped on-prem story (D-011) without touching
+    callers."""
+
+    def __init__(self, api_key: Optional[str] = None):
+        key = api_key or os.getenv("GROQ_API_KEY")
+        if not key:
+            raise RuntimeError("GROQ_API_KEY not set. Copy .env.example to .env")
+        self.client = Groq(api_key=key)
+        self.bucket = TokenBucket(CFG.tokens_per_minute, CFG.requests_per_minute)
+        self.cache = ResponseCache(CFG.cache_dir) if CFG.cache_enabled else None
+        self.total_tokens = 0
+        self.total_wait = 0.0
+        self.rate_limit_hits = 0
+
+    def complete(
+        self,
+        prompt: str,
+        model: Optional[str] = None,
+        max_tokens: Optional[int] = None,
+        temperature: Optional[float] = None,
+        json_mode: bool = False,
+    ) -> str:
+        model = model or CFG.gen_model
+        max_tokens = max_tokens or CFG.max_output_tokens
+        temperature = CFG.temperature if temperature is None else temperature
+
+        cache_key = None
+        if self.cache:
+            cache_key = ResponseCache.key(
+                model, prompt, max_tokens=max_tokens,
+                temperature=temperature, json_mode=json_mode,
+            )
+            cached = self.cache.get(cache_key)
+            if cached is not None:
+                return cached
+
+        estimated = len(prompt) // 4 + max_tokens
+        self.total_wait += self.bucket.acquire(estimated)
+
+        kwargs = {
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        }
+        if json_mode:
+            kwargs["response_format"] = {"type": "json_object"}
+
+        text = self._send_with_backoff(kwargs)
+
+        if self.cache and cache_key:
+            self.cache.put(cache_key, text)
+        return text
+
+    def _send_with_backoff(self, kwargs: dict, attempts: int = 5) -> str:
+        delay = 2.0
+        last_err = None
+        for _ in range(attempts):
+            try:
+                resp = self.client.chat.completions.create(**kwargs)
+                if getattr(resp, "usage", None):
+                    self.total_tokens += resp.usage.total_tokens
+                return resp.choices[0].message.content or ""
+            except Exception as exc:                     # noqa: BLE001
+                last_err = exc
+                msg = str(exc)
+                if "429" in msg or "rate" in msg.lower():
+                    self.rate_limit_hits += 1
+                    time.sleep(self._retry_after(msg, delay))
+                    delay = min(delay * 2, 60.0)
+                    continue
+                raise
+        raise RuntimeError(f"Groq call failed after {attempts} attempts: {last_err}")
+
+    @staticmethod
+    def _retry_after(message: str, default: float) -> float:
+        """Groq's 429 body states the wait explicitly, e.g. 'try again in
+        6m11.52s'. Parsing it beats guessing."""
+        import re
+        m = re.search(r"try again in (?:(\d+)m)?([\d.]+)s", message)
+        if m:
+            minutes = int(m.group(1) or 0)
+            return minutes * 60 + float(m.group(2)) + 0.5
+        return default
+
+    def stats(self) -> dict:
+        out = {
+            "total_tokens": self.total_tokens,
+            "seconds_waited_on_budget": round(self.total_wait, 1),
+            "rate_limit_hits": self.rate_limit_hits,
+        }
+        if self.cache:
+            out["cache"] = self.cache.stats()
+        return out

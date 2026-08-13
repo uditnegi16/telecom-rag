@@ -1,0 +1,19 @@
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.6.0+cpu
+transformers==4.46.0
+sentence-transformers
+rank-bm25
+chromadb
+pymupdf
+groq
+fastapi
+uvicorn
+pydantic
+python-dotenv
+python-multipart
+streamlit
+langgraph
+langchain-core
+pytest
+httpx
+tiktoken
