@@ -208,6 +208,114 @@ the ablation table above would not exist.
 
 ---
 
+---
+
+## Live demo — running costs and teardown
+
+The demo runs on a single EC2 instance because the pipeline keeps two PyTorch
+models resident (`bge-small` for embedding, a cross-encoder for reranking).
+That is the only reason it needs a long-lived host rather than a serverless
+function.
+
+| Resource | ID | Cost |
+|---|---|---|
+| EC2 t3.small (ap-south-1) | `i-04f8f50c5b7d0f54e` | $0.0224/hr running · $0 stopped |
+| 20 GB gp3 volume | attached | ~$1.60/month, billed even when stopped |
+| Elastic IP | if attached | free while attached to a **running** instance |
+
+Billing depends on the instance being *running*, not on traffic. Roughly $16
+per month if left on continuously.
+
+### Pause (keeps everything, stops compute charges)
+
+```bash
+aws ec2 stop-instances --region ap-south-1 --instance-ids i-04f8f50c5b7d0f54e
+```
+
+Disk, repository, `.env` and the built images all survive. Restart with:
+
+```bash
+aws ec2 start-instances --region ap-south-1 --instance-ids i-04f8f50c5b7d0f54e
+aws ec2 wait instance-running --region ap-south-1 --instance-ids i-04f8f50c5b7d0f54e
+aws ec2 describe-instances --region ap-south-1 \
+  --instance-ids i-04f8f50c5b7d0f54e \
+  --query "Reservations[0].Instances[0].PublicIpAddress" --output text
+```
+
+**The public IP changes on every stop/start** unless an Elastic IP is attached.
+An Elastic IP that is *not* attached to a running instance is charged, so a
+stopped instance with one attached costs slightly more than one without.
+
+### Terminate (permanent — deletes the instance and its disk)
+
+Run these in order. The first two are the important ones; the rest clean up
+resources that would otherwise linger.
+
+```bash
+# 1. Terminate the instance (also deletes its root volume)
+aws ec2 terminate-instances --region ap-south-1 --instance-ids i-04f8f50c5b7d0f54e
+aws ec2 wait instance-terminated --region ap-south-1 --instance-ids i-04f8f50c5b7d0f54e
+```
+
+```bash
+# 2. Release the Elastic IP, if one was allocated.
+#    An unassociated Elastic IP is billed hourly - this is the single most
+#    common source of a surprise charge after tearing an instance down.
+aws ec2 describe-addresses --region ap-south-1 \
+  --query "Addresses[].[PublicIp,AllocationId,InstanceId]" --output table
+aws ec2 release-address --region ap-south-1 --allocation-id <AllocationId>
+```
+
+```bash
+# 3. Delete the security group (must be done AFTER the instance is terminated,
+#    or AWS refuses because the group is still in use)
+aws ec2 delete-security-group --region ap-south-1 --group-name telecom-rag-sg
+```
+
+```bash
+# 4. Delete the key pair
+aws ec2 delete-key-pair --region ap-south-1 --key-name telecom-rag
+```
+
+```bash
+# 5. Remove the billing alarm
+aws cloudwatch delete-alarms --region us-east-1 --alarm-names telecom-rag-billing
+```
+
+### Verify nothing is left billing
+
+```bash
+aws ec2 describe-instances --region ap-south-1 \
+  --filters "Name=instance-state-name,Values=running,stopped" \
+  --query "Reservations[].Instances[].[InstanceId,State.Name]" --output table
+
+aws ec2 describe-volumes --region ap-south-1 \
+  --query "Volumes[].[VolumeId,State,Size]" --output table
+
+aws ec2 describe-addresses --region ap-south-1 \
+  --query "Addresses[].PublicIp" --output table
+```
+
+All three should return empty. **Unattached volumes and unassociated Elastic
+IPs keep billing after the instance is gone** — they are not deleted
+automatically, and they are the usual reason a "terminated" project still
+appears on an invoice.
+
+### Running it locally instead
+
+Nothing about the system requires AWS. After teardown:
+
+```bash
+git clone https://github.com/uditnegi16/telecom-rag.git && cd telecom-rag
+printf 'GROQ_API_KEY=gsk_...\n' > .env
+docker compose -f deploy/docker-compose.prod.yml up -d --build
+```
+
+The built index is committed to the repository (D-029), so this serves traffic
+on first boot with no ingestion step.
+
+---
+
 ## Reuse disclosure
 
 Ingestion scaffolding, the FastAPI layer, the cross-encoder reranker, the
@@ -249,8 +357,24 @@ Stated here rather than left to be discovered.
 3. **The verifier is itself an LLM** and can err. Judge–human agreement is
    reported for this reason.
 4. **τ is tuned on this corpus** and does not transfer without re-sweeping.
-5. **Ten specifications is a small corpus.** Whether retrieval precision holds
+5. **Two specifications is a small corpus.** Whether retrieval precision holds
    at 100 specs is untested and I would not claim it does.
+6. **Follow-up references resolve against the previous turn, even if that turn
+   was a refusal.** Asking a question, having it declined, then asking "what
+   about for the AMF?" rewrites against the declined question rather than the
+   last topic actually answered. Observed on the live deployment. A refusal
+   means "I have nothing on this", so it is a poor antecedent; the rewriter
+   should skip abstained turns when searching for context.
+7. **Non-3GPP PDFs degrade gracefully rather than failing.** The clause-aware
+   chunker looks for 3GPP's numbered hierarchy; a document without one falls
+   through to fixed-window splitting, so retrieval and verification still work
+   but citations lose clause-level precision and read as
+   `filename_fallback_7`. The upload response says so explicitly.
+8. **No HTTPS on the demo.** The deployment is plain HTTP on an EC2 IP.
+   Browser APIs restricted to secure contexts are therefore unavailable —
+   voice input hides itself, and `crypto.randomUUID` needed a fallback
+   (E-032). A domain plus Caddy would fix this in about fifteen minutes; it
+   was descoped for the submission deadline.
 
 ---
 
