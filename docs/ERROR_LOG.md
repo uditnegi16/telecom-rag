@@ -322,3 +322,12 @@ Delete any that do not occur; fill in the rest when they bite. They are listed h
 - **Why it was invisible:** every individual component reported success. The upload confirmed a clause count, retrieval returned results, the abstention was correct given what it retrieved. Only an end-to-end test with a question answerable *solely* from the uploaded document could expose it — which is precisely the test that had never been run.
 - **Wider point:** a migration that leaves the old subsystem importable leaves a trap. The dead code compiled, imported and ran; it just operated on a parallel universe of identifiers. Deleting or hard-failing the superseded path would have surfaced this at import time instead of as a silent retrieval miss.
 - **Related:** D-026, D-028, FR-14
+
+### E-028 — Docker build exhausted memory and hung the EC2 instance
+- **Date / phase:** 2026-08-14 / first production deployment
+- **Symptom:** During `docker compose up --build` on a t3.small (2 GB RAM + 2 GB swap), SSH dropped with `Connection closed by remote host`. Reconnection timed out, and `describe-instance-status` returned **empty** — the instance was unresponsive enough that even AWS's hypervisor checks stopped reporting. A reboot was required.
+- **Root cause:** The API image installed the full `requirements.txt`, which still contained **streamlit** — and with it altair, pydeck, pandas and a large transitive tree — alongside torch, chromadb and transformers. None of the Streamlit path is used in production; the frontend is React and the Streamlit UI is a dev-only prototype. pip resolved and built all of it at once inside a 2 GB container and exhausted the host.
+- **Fix:** A separate `requirements-api.txt` containing only what the API runs, plus `--no-compile` to skip bytecode generation during install. Dev tooling stays in `requirements.txt` for local work.
+- **Second fault exposed:** the build ran attached to the SSH session, so losing the connection killed it. Long builds on a remote host must be detached (`nohup`, `tmux`, or `docker compose up -d --build` with logs tailed separately).
+- **Wider point:** a dependency file that accumulated during development became a production liability. Nobody removed streamlit when the React frontend replaced it, because locally it cost nothing but disk. On a memory-constrained host the same unused dependency took the entire machine down. **Production images should install what they run, not what the repository happens to contain.**
+- **Related:** D-013, D-014, NFR-07

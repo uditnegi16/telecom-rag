@@ -1,0 +1,26 @@
+# API container dependencies ONLY.
+#
+# WHY A SEPARATE FILE (ERROR_LOG E-028)
+# -------------------------------------
+# The full requirements.txt still carried streamlit, which pulls in altair,
+# pydeck, pandas and a large dependency tree. None of it is used - the
+# frontend is React and the Streamlit prototype is dev-only - but pip
+# resolved and installed all of it inside a 2GB container, exhausting memory
+# and hanging the whole instance hard enough that SSH and AWS status checks
+# both stopped responding.
+#
+# Dev tooling (pytest, streamlit) stays in requirements.txt for local work.
+
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.6.0+cpu
+transformers==4.46.0
+sentence-transformers
+rank-bm25
+chromadb
+pymupdf
+groq
+fastapi
+uvicorn[standard]
+pydantic
+python-dotenv
+python-multipart

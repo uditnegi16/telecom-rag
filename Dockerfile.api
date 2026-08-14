@@ -4,8 +4,11 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
       build-essential curl && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Slim API-only dependency set. The full requirements.txt includes the
+# Streamlit prototype and test tooling, which the container does not need and
+# cannot afford to install on a 2GB host (E-028).
+COPY requirements-api.txt .
+RUN pip install --no-cache-dir --no-compile -r requirements-api.txt
 
 # Bake model weights into the image. Downloading them at container start adds
 # ~90s to cold boot and makes the service depend on Hugging Face being
