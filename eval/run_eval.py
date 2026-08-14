@@ -165,13 +165,23 @@ def main():
     ap.add_argument("--note", default="")
     ap.add_argument("--tau", type=float, default=None)
     ap.add_argument("--smoke", action="store_true")
+    # Ablation switches (D-016..D-020). RUN-001 baseline is:
+    #   --no-bm25 --no-rerank --no-verify
+    ap.add_argument("--no-bm25", action="store_true")
+    ap.add_argument("--no-rerank", action="store_true")
+    ap.add_argument("--no-verify", action="store_true")
     args = ap.parse_args()
 
-    # Wire the real pipeline here once app/graph/answer_graph.py is complete.
-    from app.graph.answer_graph import build_answer_fn
+    from app.pipeline import get_answer_fn, llm_stats
 
-    answer_fn = build_answer_fn(tau=args.tau)
+    answer_fn = get_answer_fn(
+        tau=args.tau,
+        use_bm25=not args.no_bm25,
+        use_reranker=not args.no_rerank,
+        verify=not args.no_verify,
+    )
     evaluate(answer_fn, args.run_id, args.note, tau=args.tau, smoke=args.smoke)
+    print(f"  LLM: {llm_stats()}")
 
 
 if __name__ == "__main__":

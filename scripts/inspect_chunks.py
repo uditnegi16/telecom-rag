@@ -21,29 +21,13 @@ import random
 import sys
 from pathlib import Path
 
-import fitz  # PyMuPDF
-
 from app.config import CFG
 from app.ingestion.clause_chunker import chunk_spec, summarise
-
-
-def parse_pdf(path: Path):
-    doc = fitz.open(path)
-    return [
-        {"page_number": i + 1, "text": page.get_text("text")}
-        for i, page in enumerate(doc)
-    ]
-
-
-def spec_meta(path: Path):
-    """Filename convention: TS_28552_v18.5.0.pdf"""
-    stem = path.stem
-    parts = stem.split("_")
-    if len(parts) >= 3:
-        num = parts[1]
-        spec_id = f"{parts[0]} {num[:2]}.{num[2:]}" if num.isdigit() else f"{parts[0]} {num}"
-        return spec_id, parts[2].upper()
-    return stem, "UNKNOWN"
+# Import the REAL parser. This script previously carried its own copy using
+# get_text("text"), which meant the gate-G2 inspection reported on different
+# extraction than the pipeline actually used (ERROR_LOG E-004). An inspection
+# tool that does not share the pipeline's code inspects a fiction.
+from app.ingestion.parser import parse_pdf, spec_meta_from_filename as spec_meta
 
 
 def main():
@@ -66,6 +50,18 @@ def main():
 
     print(f"\n{'='*70}\nTOTAL: {len(all_chunks)} chunks across {len(pdfs)} specs")
     print(summarise(all_chunks))
+
+    # Clause-depth histogram: a healthy 3GPP spec has many deep clauses
+    # (5.1.1.2.3). If almost everything is depth 1-2, detection is still
+    # collapsing sub-clauses into their parents.
+    from collections import Counter
+    depths = Counter(
+        len(c.clause_id.split(".")) if c.clause_id[0].isdigit() else 0
+        for c in all_chunks
+    )
+    print("\nclause depth histogram (0 = annex/unknown):")
+    for d in sorted(depths):
+        print(f"   depth {d}: {depths[d]:5d}")
 
     print(f"\n{'='*70}\n10 RANDOM CHUNKS - READ THESE. This is gate G2.\n")
     for c in random.sample(all_chunks, min(10, len(all_chunks))):

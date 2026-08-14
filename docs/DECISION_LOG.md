@@ -117,7 +117,7 @@ Every non-trivial choice in this project, with the alternatives that were reject
 - **Rejected alternatives:** Always answer with a confidence caveat — caveats do not stop invention, and users ignore them. LLM self-assessment of sufficiency — the model is a poor judge of its own ignorance.
 - **Consequences:** Some answerable questions get refused. That trade-off must be quantified, not hidden.
 - **Evidence:** —
-
+D-009 observation (13 Aug, pre-sweep): first end-to-end trace showed an out-of-corpus question (LTE X2 handover) scoring 0.634 on the reranker, above the provisional τ=0.35. The relevance gate did not fire; the abstention came from the model declaring insufficiency instead. Confirms the reranker score is not calibrated for corpus membership and that τ must be set empirically, not guessed. Sweep range widened to 0.3–0.85 for RUN-006.
 ---
 
 ### D-010 — Post-generation groundedness verification

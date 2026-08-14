@@ -67,6 +67,16 @@ ANNEX_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Annex SUB-clauses number with a letter prefix: "A.64", "B.2.1", "C.1.1".
+# CLAUSE_RE requires a leading digit, so without this the whole of an annex
+# collapsed into one giant blind-split blob - TS 28.552's informative Annex A
+# alone produced 36+ fragments with no clause structure (ERROR_LOG E-008).
+ANNEX_SUB_RE = re.compile(
+    r"^(?P<num>[A-Z](?:\.\d{1,3}){1,4})"
+    r"(?:\s{2,}|\t+|\s(?=[A-Z])|\s(?=[a-z]+[A-Z]))"
+    r"(?P<title>[^\n]{2,140})$"
+)
+
 # Lines starting with these are captions or cross-references, never clauses.
 CAPTION_PREFIXES = (
     "figure", "table", "note", "example", "editor's note", "void",
@@ -146,6 +156,11 @@ def chunk_spec(
         )
 
     chunks: List[Chunk] = []
+    # A clause id can legitimately appear more than once (an annex heading
+    # repeated in a running header, or a spec that reuses "Annex A" in its
+    # change-history). Chroma requires globally unique ids, so we suffix
+    # repeats rather than let ingestion crash (ERROR_LOG E-005).
+    seen_clause: dict = {}
     for i, head in enumerate(headings):
         start = head.line_index + 1
         end = headings[i + 1].line_index if i + 1 < len(headings) else len(lines)
@@ -173,8 +188,12 @@ def chunk_spec(
         page_start = head.page
         page_end = line_pages[min(end - 1, len(line_pages) - 1)]
 
+        occurrence = seen_clause.get(head.num, 0)
+        seen_clause[head.num] = occurrence + 1
+
         chunks.extend(
             _emit(
+                occurrence=occurrence,
                 body=body,
                 spec_id=spec_id,
                 spec_version=spec_version,
@@ -224,6 +243,7 @@ def _detect_headings(lines: List[str], line_pages: List[int]) -> List[_Heading]:
     is rejected.
     """
     headings: List[_Heading] = []
+    rejected_streak = 0
 
     for idx, line in enumerate(lines):
         lowered = line.lower()
@@ -244,6 +264,12 @@ def _detect_headings(lines: List[str], line_pages: List[int]) -> List[_Heading]:
 
         m = CLAUSE_RE.match(line)
         if not m:
+            m = ANNEX_SUB_RE.match(line)
+            if m and _looks_like_title(m.group("title").strip()):
+                headings.append(
+                    _Heading(num=m.group("num"), title=m.group("title").strip(),
+                             line_index=idx, page=line_pages[idx])
+                )
             continue
 
         num = m.group("num")
@@ -254,7 +280,17 @@ def _detect_headings(lines: List[str], line_pages: List[int]) -> List[_Heading]:
 
         prev = headings[-1].num if headings and _is_numeric(headings[-1].num) else None
         if prev and not _is_plausible_successor(prev, num):
-            continue
+            # Do not lock on. A single bad anchor (a stray caption, or a
+            # heading picked up out of order) previously caused every
+            # subsequent heading to be rejected, silently collapsing the
+            # whole document into the fallback splitter (ERROR_LOG E-004).
+            # Track consecutive rejections and re-anchor after a few.
+            rejected_streak += 1
+            if rejected_streak < 3:
+                continue
+            rejected_streak = 0      # re-anchor on this heading
+        else:
+            rejected_streak = 0
 
         headings.append(
             _Heading(num=num, title=title, line_index=idx, page=line_pages[idx])
@@ -311,8 +347,12 @@ def _is_plausible_successor(prev: str, cur: str) -> bool:
     for d in range(depth):
         if c[d] == p[d]:
             continue
-        # First differing level must increase, and not by an implausible leap.
-        return 0 < (c[d] - p[d]) <= 3 and len(c) <= len(p) + 1
+        # First differing level must INCREASE. The magnitude limit is
+        # deliberately generous: specs skip clause numbers, and `_looks_like_title`
+        # is the primary filter for captions and prose. A tight limit here
+        # rejected legitimate headings after any gap in numbering
+        # (ERROR_LOG E-006).
+        return 0 < (c[d] - p[d]) <= 20
     # Identical prefix but shallower - e.g. 5.2.3 -> 5.2 (a repeated heading
     # in a running header). Reject.
     return False
@@ -360,6 +400,7 @@ def _estimate_tokens(text: str) -> int:
 
 
 def _emit(
+    occurrence: int,
     body: str,
     spec_id: str,
     spec_version: str,
@@ -382,8 +423,9 @@ def _emit(
 
     out: List[Chunk] = []
     total = len(parts)
+    occ = f"_occ{occurrence}" if occurrence else ""
     for k, part in enumerate(parts):
-        suffix = f"_p{k}" if total > 1 else ""
+        suffix = (f"_p{k}" if total > 1 else "") + occ
         text = f"{breadcrumb}\n\n{part}"
         out.append(
             Chunk(
@@ -437,7 +479,24 @@ def _sub_split(body: str, max_tokens: int, overlap_tokens: int) -> List[str]:
     if cur:
         parts.append(" ".join(cur).strip())
 
-    return [p for p in parts if p]
+    # Sentence splitting cannot split text with no sentence punctuation -
+    # measurement tables and ASN.1 blocks have none, so a "part" could still
+    # be thousands of tokens. That is not cosmetic: at rerank_top_n=3, three
+    # 2300-token chunks is ~7000 tokens in one request, which exceeds the
+    # entire 6000 TPM Groq budget and guarantees a 429 (E-009, NFR-01).
+    # Hard-split anything still over the cap.
+    capped: List[str] = []
+    for part in parts:
+        if len(part) <= max_chars * 1.15:
+            capped.append(part)
+            continue
+        step = max_chars - overlap_chars
+        for start in range(0, len(part), max(step, 1)):
+            piece = part[start : start + max_chars].strip()
+            if piece:
+                capped.append(piece)
+
+    return [p for p in capped if p]
 
 
 def _fallback_window_chunks(

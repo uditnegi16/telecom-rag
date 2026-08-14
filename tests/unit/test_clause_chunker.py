@@ -133,3 +133,33 @@ class TestPdfExtractionRealities:
             "5.2 is defined in TS 23.501 and applies to all network functions.\n"
         )], "TS 28.552", "V18.5.0")
         assert "5.2" not in {c.clause_id for c in chunks}
+
+
+class TestAnnexAndCapping:
+    """E-008, E-009: annex sub-clauses and the hard token cap."""
+
+    def test_annex_subclauses_detected(self):
+        chunks = chunk_spec([page(1,
+            "Annex A (informative): Use cases\n"
+            "A.64  Monitoring of RF performance\n"
+            "Low beam switch success rate impacts user experience significantly here.\n"
+            "A.65  Monitoring of beam switching\n"
+            "It is essential to monitor the success rate of beam switch operations.\n"
+        )], "TS 28.552", "V18.11.0")
+        ids = {c.clause_id for c in chunks}
+        assert "A.64" in ids and "A.65" in ids
+
+    def test_hard_cap_on_unsplittable_text(self):
+        """Table-like text has no sentence punctuation to split on."""
+        blob = "notificationId NotificationType eventTime systemDN moiChanges " * 400
+        chunks = chunk_spec([page(1, f"5  Data\n5.1  Table of attributes\n{blob}")],
+                            "TS 28.532", "V18.7.0")
+        assert len(chunks) > 1
+        assert max(c.token_estimate for c in chunks) < 700
+
+    def test_normal_chunks_unaffected_by_cap(self):
+        chunks = chunk_spec([page(1,
+            "5  Measurements\n5.1  Counter\n"
+            "The AMF shall count every registration request received from the UE.\n"
+        )], "TS 28.552", "V18.11.0")
+        assert len(chunks) == 1

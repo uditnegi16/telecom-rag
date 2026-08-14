@@ -33,6 +33,10 @@ from groq import Groq
 from app.config import CFG
 
 
+class LLMBadRequest(Exception):
+    """Deterministic 400 from the provider. Not retryable."""
+
+
 class TokenBucket:
     """Sliding-window pacer for both tokens/min and requests/min."""
 
@@ -166,11 +170,17 @@ class GroqLLM:
             except Exception as exc:                     # noqa: BLE001
                 last_err = exc
                 msg = str(exc)
-                if "429" in msg or "rate" in msg.lower():
+                if "429" in msg or "rate limit" in msg.lower():
                     self.rate_limit_hits += 1
                     time.sleep(self._retry_after(msg, delay))
                     delay = min(delay * 2, 60.0)
                     continue
+                # A 400 is deterministic - the same prompt will fail the same
+                # way every time. Retrying it 5 times wastes ~30s and buries
+                # the real cause (E-010). Fail fast with a typed error so
+                # callers can skip the item instead of aborting the run.
+                if "400" in msg or "json_validate_failed" in msg:
+                    raise LLMBadRequest(msg) from exc
                 raise
         raise RuntimeError(f"Groq call failed after {attempts} attempts: {last_err}")
 

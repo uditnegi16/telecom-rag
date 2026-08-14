@@ -60,6 +60,7 @@ def build_answer_fn(
     retrieve_fn: Callable | None = None,
     llm=None,
     tau: float | None = None,
+    verify: bool = True,
 ) -> Callable[[str], dict]:
     """Return `answer(question) -> dict` in the shape eval/run_eval.py expects.
 
@@ -70,12 +71,11 @@ def build_answer_fn(
     tau_eff = CFG.tau_abstain if tau is None else tau
 
     if retrieve_fn is None or llm is None:
-        raise NotImplementedError(
-            "Wire retrieve_fn (app.retrieval.search.retrieve, partially applied "
-            "with your dense_search/bm25/chunk_lookup/reranker) and llm "
-            "(app.llm.groq_client.GroqLLM()) here. Left explicit so the "
-            "dependency is visible rather than hidden in a global."
-        )
+        # Composition happens in app.pipeline - see get_answer_fn().
+        from app.pipeline import build_retrieve_fn, _get_llm
+
+        retrieve_fn = retrieve_fn or build_retrieve_fn()
+        llm = llm or _get_llm()
 
     def answer(question: str) -> dict:
         # --- node: retrieve ------------------------------------------------
@@ -120,7 +120,9 @@ def build_answer_fn(
 
         # --- node: verify entailment (FR-08) -------------------------------
         chunk_map = citation_check.cited_chunk_map(chunks)
-        verdicts = entailment.verify_claims(parsed["claims"], chunk_map, llm=llm)
+        verdicts = entailment.verify_claims(
+            parsed["claims"], chunk_map, llm=llm if verify else None
+        )
         grounded = [v for v in verdicts if v.supported]
 
         base["claim_verdicts"] = [v.supported for v in verdicts]
