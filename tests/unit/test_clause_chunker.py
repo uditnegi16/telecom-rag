@@ -163,3 +163,33 @@ class TestAnnexAndCapping:
             "The AMF shall count every registration request received from the UE.\n"
         )], "TS 28.552", "V18.11.0")
         assert len(chunks) == 1
+
+
+class TestSpecIdentity:
+    """E-025: accept ETSI's own filenames; prefer the document's own header."""
+
+    def test_etsi_download_filename(self):
+        from app.ingestion.parser import spec_meta_from_filename
+        assert spec_meta_from_filename("ts_128554v180500p.pdf") == ("TS 28.554", "V18.5.0")
+        assert spec_meta_from_filename("ts_128552v181100p.pdf") == ("TS 28.552", "V18.11.0")
+        assert spec_meta_from_filename("tr_121905v180100p.pdf") == ("TR 21.905", "V18.1.0")
+
+    def test_own_convention_still_works(self):
+        from app.ingestion.parser import spec_meta_from_filename
+        assert spec_meta_from_filename("TS_28552_v18.11.0.pdf") == ("TS 28.552", "V18.11.0")
+
+    def test_unknown_filename_degrades_gracefully(self):
+        from app.ingestion.parser import spec_meta_from_filename
+        spec, ver = spec_meta_from_filename("some-random-doc.pdf")
+        assert ver == "UNKNOWN"
+
+    def test_identity_read_from_document_header(self):
+        from app.ingestion.parser import spec_meta_from_content
+        pages = [{"page_number": 1, "text": "cover"},
+                 {"page_number": 2,
+                  "text": "3GPP TS 28.554 version 18.5.0 Release 18   Contents"}]
+        assert spec_meta_from_content(pages) == ("TS 28.554", "V18.5.0")
+
+    def test_content_detection_returns_none_when_absent(self):
+        from app.ingestion.parser import spec_meta_from_content
+        assert spec_meta_from_content([{"page_number": 1, "text": "not a spec"}]) is None

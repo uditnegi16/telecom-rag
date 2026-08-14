@@ -22,9 +22,18 @@ from __future__ import annotations
 from app.config import CFG
 
 REFUSAL_MESSAGE = (
-    "I could not find this in the indexed 3GPP specifications. "
-    "Rather than guess, I am declining to answer. "
-    "You may want to check a specification outside the indexed corpus."
+    "I could not find support for this in the indexed 3GPP specifications, "
+    "so I am declining to answer rather than guess. The passages I did "
+    "retrieve are shown below — if they look close but not quite right, the "
+    "answer may exist in a specification outside the indexed corpus, or for "
+    "a different network function."
+)
+
+TIMEOUT_MESSAGE = (
+    "This request exceeded the time budget, most likely because the shared "
+    "free-tier API key is rate limited right now. Nothing unverified is "
+    "returned, so I am declining rather than answering partially. "
+    "Please try again in a moment."
 )
 
 
@@ -45,7 +54,7 @@ def should_answer(confidence: float, tau: float | None = None) -> bool:
 
 def abstain(reason: str, confidence: float = 0.0) -> dict:
     return {
-        "answer": REFUSAL_MESSAGE,
+        "answer": TIMEOUT_MESSAGE if "timeout" in reason else REFUSAL_MESSAGE,
         "claims": [],
         "citations": [],
         "confidence": confidence,

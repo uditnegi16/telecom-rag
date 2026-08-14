@@ -1,13 +1,32 @@
+@'
 __pycache__/
 *.pyc
 .env
 venv/
 .venv/
+.pytest_cache/
+
+# Frontend
+node_modules/
+frontend/node_modules/
+frontend/dist/
+
+# Corpus PDFs are large and redistributable from ETSI - not committed.
 data/raw/*.pdf
-data/processed/chroma/
+
+# The BUILT INDEX *is* committed (D-029): the deployed container must serve
+# traffic on first boot. Rebuilding on the server would need the source PDFs
+# plus a multi-minute CPU embedding job at deploy time, and any failure there
+# yields a live site that silently retrieves nothing.
+#   data/processed/chroma/       vector index
+#   data/processed/chunks.json   chunk records
+#   data/processed/bm25.pkl      lexical index
+
+# Runtime state, per-deployment - never committed.
+data/processed/conversations.db
+data/processed/quota.json
 data/processed/llm_cache/
-data/processed/bm25.pkl
+data/processed/hf_cache/
 eval/results/*.json
 !eval/results/.gitkeep
-.pytest_cache/
-data/processed/chunks.json
+'@ | Set-Content .gitignore -Encoding UTF8

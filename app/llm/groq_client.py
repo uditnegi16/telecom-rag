@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import time
 from collections import deque
@@ -32,17 +33,38 @@ from groq import Groq
 
 from app.config import CFG
 
+log = logging.getLogger("telecomrag.llm")
+
 
 class LLMBadRequest(Exception):
     """Deterministic 400 from the provider. Not retryable."""
 
 
 class TokenBucket:
-    """Sliding-window pacer for both tokens/min and requests/min."""
+    """Sliding-window pacer for tokens/min and requests/min.
 
-    def __init__(self, tokens_per_min: int, requests_per_min: int):
+    THREE BUGS FIXED HERE (ERROR_LOG E-013), all found when a single query
+    appeared to hang for ten minutes while the Groq account was in fact
+    healthy with 944/1000 requests remaining:
+
+    1. INFINITE LOOP. If `estimated_tokens` exceeded `self.tpm`, the exit
+       condition could never be satisfied - not even with an empty window -
+       so it slept 60s in a loop forever. A pacer must never be able to
+       block a request that will never fit; that is a configuration error
+       and should raise, not sleep.
+    2. SILENT. It slept with no output, so a long legitimate wait was
+       indistinguishable from a hang. Anything that can block for minutes
+       must say so.
+    3. NO CEILING. There was no bound on total wait. Now capped, and it
+       raises rather than blocking indefinitely.
+    """
+
+    def __init__(self, tokens_per_min: int, requests_per_min: int,
+                 max_wait_s: float = 90.0, verbose: bool = True):
         self.tpm = tokens_per_min
         self.rpm = requests_per_min
+        self.max_wait_s = max_wait_s
+        self.verbose = verbose
         self._events: deque = deque()   # (timestamp, tokens)
 
     def _prune(self, now: float) -> None:
@@ -50,8 +72,13 @@ class TokenBucket:
             self._events.popleft()
 
     def acquire(self, estimated_tokens: int) -> float:
-        """Block until sending `estimated_tokens` fits the window.
-        Returns seconds waited (recorded in run stats)."""
+        if estimated_tokens > self.tpm:
+            raise ValueError(
+                f"Single request estimated at {estimated_tokens} tokens exceeds "
+                f"the {self.tpm} TPM budget - it can never be scheduled. "
+                f"Reduce rerank_top_n or max_chunk_tokens in config.py."
+            )
+
         waited = 0.0
         while True:
             now = time.time()
@@ -60,8 +87,23 @@ class TokenBucket:
             if used + estimated_tokens <= self.tpm and len(self._events) < self.rpm:
                 self._events.append((now, estimated_tokens))
                 return waited
+
+            if waited >= self.max_wait_s:
+                raise RuntimeError(
+                    f"Token pacer waited {waited:.0f}s without a slot "
+                    f"({used}/{self.tpm} TPM used). Budget likely misconfigured."
+                )
+
             oldest = self._events[0][0] if self._events else now
-            sleep_for = max(0.5, 60.0 - (now - oldest) + 0.25)
+            sleep_for = min(max(0.5, 60.0 - (now - oldest) + 0.25),
+                            self.max_wait_s - waited)
+            if self.verbose:
+                # logging, NOT print: print() from a worker thread inside
+                # uvicorn does not reliably reach the console, so a minutes-
+                # long pacer wait produced no output at all and looked like a
+                # hang (ERROR_LOG E-017).
+                log.warning("pacer: %d/%d TPM used, waiting %.1fs",
+                            used, self.tpm, sleep_for)
             time.sleep(sleep_for)
             waited += sleep_for
 
@@ -112,7 +154,10 @@ class GroqLLM:
         if not key:
             raise RuntimeError("GROQ_API_KEY not set. Copy .env.example to .env")
         self.client = Groq(api_key=key)
-        self.bucket = TokenBucket(CFG.tokens_per_minute, CFG.requests_per_minute)
+        self.bucket = TokenBucket(
+            CFG.tokens_per_minute, CFG.requests_per_minute,
+            max_wait_s=CFG.max_pacer_wait_s, verbose=CFG.pacer_verbose,
+        )
         self.cache = ResponseCache(CFG.cache_dir) if CFG.cache_enabled else None
         self.total_tokens = 0
         self.total_wait = 0.0
@@ -148,6 +193,7 @@ class GroqLLM:
             "messages": [{"role": "user", "content": prompt}],
             "temperature": temperature,
             "max_tokens": max_tokens,
+            "timeout": CFG.llm_request_timeout_s,
         }
         if json_mode:
             kwargs["response_format"] = {"type": "json_object"}

@@ -1,0 +1,26 @@
+FROM python:3.12-slim
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      build-essential curl && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Bake model weights into the image. Downloading them at container start adds
+# ~90s to cold boot and makes the service depend on Hugging Face being
+# reachable at runtime - a needless availability dependency for a demo that
+# must work on first click.
+ENV HF_HOME=/opt/hf
+RUN python -c "\
+from sentence_transformers import SentenceTransformer, CrossEncoder; \
+SentenceTransformer('BAAI/bge-small-en-v1.5'); \
+CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2')"
+
+COPY . .
+
+ENV PYTHONUNBUFFERED=1 DEMO_QUESTION_LIMIT=8 DEMO_GLOBAL_DAILY_CAP=300
+EXPOSE 8000
+HEALTHCHECK --interval=30s --timeout=5s --start-period=45s --retries=3 \
+  CMD curl -fsS http://localhost:8000/api/v1/health || exit 1
+CMD ["uvicorn", "app.api.main:app", "--host", "0.0.0.0", "--port", "8000"]

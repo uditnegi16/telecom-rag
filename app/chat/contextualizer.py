@@ -59,12 +59,27 @@ Return JSON only: {{"standalone_question": "..."}}"""
 
 
 def needs_rewrite(question: str, history: List[dict]) -> bool:
+    """Only rewrite genuine follow-ups.
+
+    Previously ANY input of four words or fewer was rewritten, so "Hello,
+    hello, hello." became the previous question and was answered as though
+    the user had asked it (ERROR_LOG E-021). Shortness alone is not evidence
+    of dependence - the input must actually contain a reference.
+
+    Intent classification (app/chat/intent.py) now runs first and diverts
+    greetings entirely; this is the second line of defence.
+    """
     if not history:
         return False
     q = question.strip()
-    if len(q.split()) <= 4:
-        return True
-    return bool(DEPENDENT.search(q))
+    if not q:
+        return False
+
+    from app.chat.intent import Intent, classify
+
+    if classify(q, has_history=True).intent != Intent.FOLLOW_UP:
+        return False
+    return True
 
 
 def contextualize(

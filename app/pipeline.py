@@ -54,6 +54,7 @@ def build_retrieve_fn(
     use_bm25: bool = True,
     use_reranker: bool = True,
     top_n: Optional[int] = None,
+    session_id: Optional[str] = None,
 ) -> Callable[[str], dict]:
     """Flags exist for the ablation. RUN-001 is dense-only, no reranker; each
     later run turns one on. Wiring them here means an ablation step is a
@@ -61,7 +62,16 @@ def build_retrieve_fn(
     from app.ingestion import vector_store as vs
     from app.retrieval.search import retrieve
 
-    bm25 = _get_bm25() if use_bm25 else _NullBM25()
+    if not use_bm25:
+        bm25 = _NullBM25()
+    elif session_id:
+        # Uploaded chunks are not in the prebuilt BM25 index, and rebuilding
+        # it globally would leak one session's documents into everyone's
+        # lexical search. A small per-session index over the uploads is
+        # merged with the base index instead (D-026).
+        bm25 = _SessionBM25(_get_bm25(), session_id)
+    else:
+        bm25 = _get_bm25()
 
     if use_reranker:
         from app.retrieval.reranker import rerank
@@ -73,9 +83,11 @@ def build_retrieve_fn(
                 c["reranker_score"] = round(max(0.0, 1.0 - i * 0.05), 4)
             return chunks
 
+    dense = functools.partial(vs.dense_search, session_id=session_id)
+
     return functools.partial(
         retrieve,
-        dense_search=vs.dense_search,
+        dense_search=dense,
         bm25_index=bm25,
         chunk_lookup=vs.get_chunk,
         reranker=rerank,
@@ -90,19 +102,46 @@ class _NullBM25:
         return []
 
 
+class _SessionBM25:
+    """Base index plus a session-local index over uploaded chunks."""
+
+    def __init__(self, base, session_id: str):
+        self.base = base
+        self.session_id = session_id
+        self._local = None
+
+    def _get_local(self):
+        if self._local is None:
+            from app.ingestion import vector_store as vs
+            from app.retrieval.bm25_index import BM25Index
+
+            chunks = vs.session_chunks(self.session_id)
+            self._local = BM25Index().build(chunks) if chunks else _NullBM25()
+        return self._local
+
+    def search(self, query: str, top_k: int):
+        merged = self.base.search(query, top_k) + self._get_local().search(query, top_k)
+        merged.sort(key=lambda x: x[1], reverse=True)
+        return merged[:top_k]
+
+
 def get_answer_fn(
     tau: Optional[float] = None,
     use_bm25: bool = True,
     use_reranker: bool = True,
     verify: bool = True,
+    suppress: bool = True,
+    session_id: Optional[str] = None,
 ) -> Callable[[str], dict]:
     from app.graph.answer_graph import build_answer_fn
 
     return build_answer_fn(
-        retrieve_fn=build_retrieve_fn(use_bm25=use_bm25, use_reranker=use_reranker),
+        retrieve_fn=build_retrieve_fn(use_bm25=use_bm25, use_reranker=use_reranker,
+                                      session_id=session_id),
         llm=_get_llm(),
         tau=tau,
         verify=verify,
+        suppress=suppress,
     )
 
 

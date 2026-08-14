@@ -70,7 +70,17 @@ def reset_collection():
     return get_collection()
 
 
-def store_chunks(chunks: List[dict], embeddings: List[List[float]]) -> int:
+def store_chunks(chunks: List[dict], embeddings: List[List[float]],
+                 session_id: str | None = None) -> int:
+    """Index chunks. `session_id` scopes user uploads (FR-14, D-026).
+
+    Uploaded documents must NOT leak into other visitors' retrieval. Every
+    chunk carries an `owner` field: "base" for the shipped corpus, or the
+    session id for an upload. Retrieval filters on it. Without this, one
+    person's document would answer everyone's questions - unacceptable for
+    anything an operator would run internally, where uploaded material is
+    routinely confidential.
+    """
     if len(chunks) != len(embeddings):
         raise ValueError("chunks and embeddings length mismatch")
 
@@ -84,6 +94,7 @@ def store_chunks(chunks: List[dict], embeddings: List[List[float]]) -> int:
             documents=[c["text"] for c in part],
             metadatas=[
                 {
+                    "owner": session_id or "base",
                     "spec_id": c["spec_id"],
                     "spec_version": c["spec_version"],
                     "clause_id": c["clause_id"],
@@ -101,15 +112,48 @@ def store_chunks(chunks: List[dict], embeddings: List[List[float]]) -> int:
     return len(chunks)
 
 
-def dense_search(query: str, top_k: int) -> List[tuple]:
-    """Returns [(chunk_id, similarity)] - the shape RRF expects."""
+def dense_search(query: str, top_k: int,
+                 session_id: str | None = None) -> List[tuple]:
+    """Returns [(chunk_id, similarity)].
+
+    Scope: the shipped corpus plus this session's uploads only. Other
+    sessions' documents are invisible (D-026).
+    """
     from app.ingestion.embedder import embed_query
 
     col = get_collection(create=False)
-    res = col.query(query_embeddings=[embed_query(query)], n_results=top_k)
+    owners = ["base"] + ([session_id] if session_id else [])
+    res = col.query(
+        query_embeddings=[embed_query(query)],
+        n_results=top_k,
+        where={"owner": {"$in": owners}},
+    )
     ids = res["ids"][0]
     dists = res["distances"][0]
     return [(cid, 1.0 - d) for cid, d in zip(ids, dists)]
+
+
+def delete_session_chunks(session_id: str) -> int:
+    """Remove a session's uploads. Called on session expiry so a long-running
+    demo container does not accumulate every visitor's documents."""
+    col = get_collection(create=False)
+    got = col.get(where={"owner": session_id})
+    ids = got.get("ids", [])
+    if ids:
+        col.delete(ids=ids)
+    return len(ids)
+
+
+def session_chunks(session_id: str) -> List[dict]:
+    col = get_collection(create=False)
+    got = col.get(where={"owner": session_id},
+                  include=["documents", "metadatas"])
+    out = []
+    for cid, doc, md in zip(got.get("ids", []), got.get("documents", []),
+                            got.get("metadatas", [])):
+        body = doc.split("\n\n", 1)[-1] if "\n\n" in doc else doc
+        out.append({"chunk_id": cid, "text": doc, "body": body, **md})
+    return out
 
 
 def get_chunk(chunk_id: str) -> Optional[dict]:

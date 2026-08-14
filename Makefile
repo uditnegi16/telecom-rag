@@ -23,11 +23,20 @@ sweep:           ## Gate G6: tau sweep for the abstention operating point.
 		python -m eval.run_eval --run-id 006-t$$t --tau $$t --note "tau sweep"; \
 	done
 
-api:
+api:            ## FastAPI backend on :8000
 	uvicorn app.api.main:app --reload --port 8000
 
-ui:
+web:            ## React frontend on :5173 (proxies /api to :8000)
+	cd frontend && npm run dev
+
+ui:             ## legacy Streamlit prototype
 	streamlit run ui/streamlit_app.py
+
+sweep-tau:      ## Choose the abstention threshold. Retrieval only, ZERO tokens.
+	python -m scripts.sweep_tau
+
+prod:           ## Full production stack (nginx + API) on :80
+	docker compose -f deploy/docker-compose.prod.yml up -d --build
 
 test:
 	pytest -q

@@ -79,6 +79,13 @@ def build_answer_fn(
         llm = llm or _get_llm()
 
     def answer(question: str, history: list | None = None) -> dict:
+        import time as _time
+        _t0 = _time.time()
+        _budget_started = False
+
+        def over_budget() -> bool:
+            return (_time.time() - _t0) > CFG.pipeline_budget_s
+
         # --- node: contextualise (FR-13, D-024) ----------------------------
         # A follow-up like "what about for the SMF?" is unretrievable as
         # written. History resolves the reference; it never supplies facts.
@@ -88,6 +95,10 @@ def build_answer_fn(
 
         # --- node: retrieve ------------------------------------------------
         r = retrieve_fn(search_query)
+        # Restart the clock after retrieval: cold-start model loading is not
+        # something the caller should be penalised for.
+        _t0 = _time.time()
+        _budget_started = True
         chunks = r["chunks"]
         retrieved_clauses = [c.get("clause_id", "") for c in chunks]
         conf = gate.confidence_from_retrieval(r["top_score"], len(chunks))
@@ -112,6 +123,13 @@ def build_answer_fn(
         # --- edge: abstention gate (D-009) ---------------------------------
         if not gate.should_answer(conf, tau_eff):
             return {**base, **gate.abstain("below_tau", conf)}
+
+        # Budget covers the LLM calls, which are what can actually stall.
+        # Local retrieval is bounded and fast once models are warm; on a cold
+        # process it is slow but finite, and failing the request for that is
+        # worse than being late (E-018).
+        if over_budget():
+            return {**base, **gate.abstain("timeout_before_generation", conf)}
 
         # --- node: generate ------------------------------------------------
         # Generation sees the SEARCH query and the retrieved chunks - never
@@ -138,6 +156,11 @@ def build_answer_fn(
             return {**base, **gate.abstain(f"citation_invalid: {cit.reason}", conf)}
 
         # --- node: verify entailment (FR-08) -------------------------------
+        if over_budget():
+            # Unverified claims must never be emitted, so a timeout here is
+            # an abstention, not a shortcut past verification (NFR-03).
+            return {**base, **gate.abstain("timeout_before_verification", conf)}
+
         chunk_map = citation_check.cited_chunk_map(chunks)
         # The verifier has TWO roles and they must be controlled separately
         # (ERROR_LOG E-012):

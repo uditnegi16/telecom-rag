@@ -19,7 +19,8 @@ from pathlib import Path
 
 from app.config import CFG
 from app.ingestion.clause_chunker import chunk_spec, summarise
-from app.ingestion.parser import parse_pdf, spec_meta_from_filename
+from app.ingestion.parser import (parse_pdf, spec_meta_from_content,
+                                  spec_meta_from_filename)
 from app.retrieval.bm25_index import BM25Index
 
 CHUNKS_JSON = Path("data/processed/chunks.json")
@@ -43,8 +44,10 @@ def main():
 
     print(f"Parsing and chunking {len(pdfs)} specs...\n")
     for pdf in pdfs:
-        spec_id, version = spec_meta_from_filename(pdf)
         pages = parse_pdf(pdf)
+        # Prefer the identity printed in the document over the filename.
+        spec_id, version = (spec_meta_from_content(pages)
+                            or spec_meta_from_filename(pdf))
         chunks = chunk_spec(pages, spec_id, version, max_tokens=CFG.max_chunk_tokens)
         s = summarise(chunks)
         flag = ""

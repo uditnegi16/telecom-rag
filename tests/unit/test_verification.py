@@ -119,3 +119,111 @@ class TestCitationNormalisation:
         m = cited_chunk_map([{"chunk_id": "TS_1.2", "body": "x"}])
         from app.verification.citation_check import normalise
         assert m[normalise("[TS_1.2]")]["body"] == "x"
+
+
+class TestIntentClassification:
+    """E-021: a greeting must never be rewritten into the previous question."""
+
+    def test_greetings_not_billable(self):
+        from app.chat.intent import Intent, classify
+        for t in ["hi", "hello", "hey there!", "thanks", "ok", "bye",
+                  "Hello, hello, hello.", "test test"]:
+            c = classify(t, has_history=True)
+            assert c.intent == Intent.GREETING, t
+            assert not c.billable, t
+
+    def test_meta_questions_answered_directly(self):
+        from app.chat.intent import Intent, classify
+        for t in ["what can you do?", "which specs do you know?", "who are you"]:
+            assert classify(t, has_history=False).intent == Intent.META, t
+
+    def test_real_followups_still_route_to_rag(self):
+        from app.chat.intent import Intent, classify
+        for t in ["what about for the AMF?", "why?", "and the SMF?"]:
+            c = classify(t, has_history=True)
+            assert c.intent == Intent.FOLLOW_UP, t
+            assert c.billable, t
+
+    def test_spec_questions_billable(self):
+        from app.chat.intent import Intent, classify
+        c = classify("How is the aggregated active session time measured?", True)
+        assert c.intent == Intent.SPEC_QUESTION and c.billable
+
+    def test_ambiguous_short_input_is_unclear_not_rewritten(self):
+        from app.chat.intent import Intent, classify
+        assert classify("5QI", has_history=True).intent == Intent.UNCLEAR
+
+    def test_greeting_never_triggers_rewrite(self):
+        from app.chat.contextualizer import needs_rewrite
+        hist = [{"role": "user", "content": "What is the PCF counter unit?"}]
+        assert not needs_rewrite("Hello, hello, hello.", hist)
+        assert not needs_rewrite("hi", hist)
+        assert needs_rewrite("what about for the AMF?", hist)
+
+
+class TestRouteBindings:
+    """E-022: every route must bind to its intended handler.
+
+    A helper function inserted between a decorator and its function silently
+    rebinds the route to the helper. FastAPI accepts it; the failure appears
+    only at request time as a response-validation error.
+    """
+
+    def test_routes_bind_to_correct_handlers(self):
+        from app.api.routes import router
+        expected = {
+            ("/chat", "POST"): "chat",
+            ("/health", "GET"): "health",
+            ("/corpus", "GET"): "corpus",
+            ("/upload", "POST"): "upload",
+            ("/quota", "GET"): "quota_status",
+            ("/conversations", "GET"): "list_conversations",
+        }
+        actual = {
+            (r.path, m): r.name
+            for r in router.routes
+            for m in r.methods
+            if not m.startswith("HEAD")
+        }
+        for key, name in expected.items():
+            assert actual.get(key) == name, f"{key} -> {actual.get(key)}, want {name}"
+
+
+class TestRequestValidationMatchesClassifier:
+    """E-023: the validator must not reject inputs the classifier handles."""
+
+    def test_short_greetings_pass_validation(self):
+        from app.api.routes import ChatRequest
+        for q in ["hi", "ok", "hey", "5QI", "a"]:
+            ChatRequest(question=q)          # must not raise
+
+    def test_empty_still_rejected(self):
+        import pydantic
+        from app.api.routes import ChatRequest
+        try:
+            ChatRequest(question="")
+            raise AssertionError("empty question should be rejected")
+        except pydantic.ValidationError:
+            pass
+
+    def test_every_accepted_input_has_an_intent(self):
+        from app.api.routes import ChatRequest
+        from app.chat.intent import classify
+        for q in ["hi", "5QI", "why?", "What is the PCF counter unit?"]:
+            ChatRequest(question=q)
+            assert classify(q, has_history=True).intent is not None
+
+
+class TestSessionSystemConsistency:
+    """E-026: upload and chat must scope documents with the SAME identifier."""
+
+    def test_routes_use_one_session_system(self):
+        """The in-memory SessionStore was superseded by the SQLite store.
+        Any lingering import means two subsystems mint different ids for the
+        same conversation, and session-scoped retrieval silently fails."""
+        from pathlib import Path
+        src = Path("app/api/routes.py").read_text(encoding="utf-8")
+        assert "from app.chat.session import STORE" not in src, (
+            "routes.py still imports the superseded in-memory session store"
+        )
+        assert "from app.chat import store" in src

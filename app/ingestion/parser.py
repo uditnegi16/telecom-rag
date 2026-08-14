@@ -189,13 +189,65 @@ def _strip_front_matter(pages: List[dict]) -> List[dict]:
     return pages          # pattern not found: keep everything, do not guess
 
 
+# ETSI's own download filename, e.g. "ts_128554v180500p.pdf".
+# ETSI numbers 3GPP specs with a leading 1: TS 128 554 IS 3GPP TS 28.554.
+ETSI_FILENAME_RE = re.compile(
+    r"^(?P<kind>ts|tr)_(?P<num>\d{6})v(?P<ver>\d{6})", re.I
+)
+
+# Our own convention, e.g. "TS_28552_v18.11.0.pdf".
+OWN_FILENAME_RE = re.compile(
+    r"^(?P<kind>TS|TR)_(?P<num>\d{5})_v(?P<ver>[\d.]+)", re.I
+)
+
+# The identity printed in the running header of every ETSI-published 3GPP
+# spec, e.g. "3GPP TS 28.554 version 18.5.0 Release 18". Reading it from the
+# CONTENT is more reliable than any filename convention, because the file can
+# be renamed and the header cannot (ERROR_LOG E-025).
+CONTENT_ID_RE = re.compile(
+    r"3GPP\s+(?P<kind>TS|TR)\s+(?P<num>\d{2}\.\d{3})\s+version\s+"
+    r"(?P<ver>[\d.]+)",
+    re.I,
+)
+
+
+def spec_meta_from_content(pages: List[dict], max_pages: int = 6):
+    """Read the spec identity from the document text. Returns None if absent."""
+    for page in pages[:max_pages]:
+        m = CONTENT_ID_RE.search(page.get("text", ""))
+        if m:
+            return (f"{m.group('kind').upper()} {m.group('num')}",
+                    f"V{m.group('ver')}")
+    return None
+
+
 def spec_meta_from_filename(path: str | Path) -> tuple[str, str]:
-    """Convention: TS_28552_v18.11.0.pdf -> ("TS 28.552", "V18.11.0")"""
+    """Derive spec id and version from a filename.
+
+    Accepts BOTH ETSI's own download name and our internal convention.
+    Requiring users to rename files before upload was a needless burden -
+    ts_128554v180500p.pdf is exactly what etsi.org hands you (E-025).
+    """
     stem = Path(path).stem
+
+    m = ETSI_FILENAME_RE.match(stem)
+    if m:
+        etsi_num = m.group("num")            # e.g. 128554
+        # Strip ETSI's leading 1 to recover the 3GPP number: 128554 -> 28.554
+        core = etsi_num[1:] if etsi_num.startswith("1") else etsi_num
+        v = m.group("ver")                   # 180500 -> 18.5.0
+        version = f"V{int(v[0:2])}.{int(v[2:4])}.{int(v[4:6])}"
+        return f"{m.group('kind').upper()} {core[:2]}.{core[2:]}", version
+
+    m = OWN_FILENAME_RE.match(stem)
+    if m:
+        num = m.group("num")
+        ver = m.group("ver")
+        return (f"{m.group('kind').upper()} {num[:2]}.{num[2:]}",
+                ver if ver.upper().startswith("V") else f"V{ver}")
+
     parts = stem.split("_")
     if len(parts) >= 3 and parts[1].isdigit():
         num = parts[1]
         return f"{parts[0]} {num[:2]}.{num[2:]}", parts[2].upper()
-    if len(parts) >= 3:
-        return f"{parts[0]} {parts[1]}", parts[2].upper()
     return stem, "UNKNOWN"

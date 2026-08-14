@@ -1,22 +1,33 @@
+# Production stack: nginx serves the built React SPA and proxies /api to the
+# FastAPI container. Same-origin, so no CORS and no backend hostname baked
+# into the frontend build.
+#
+#   cd telecom-rag && docker compose -f deploy/docker-compose.prod.yml up -d --build
+
 services:
-  app:
+  api:
     build:
       context: ..
-      dockerfile: Dockerfile
-    image: telecom-rag:latest
+      dockerfile: Dockerfile.api
+    image: telecom-rag-api:latest
     restart: unless-stopped
-    ports:
-      - "80:8501"
     environment:
       - GROQ_API_KEY=${GROQ_API_KEY}
-      - DEMO_QUESTION_LIMIT=8
-      - DEMO_GLOBAL_DAILY_CAP=300
+      - DEMO_QUESTION_LIMIT=${DEMO_QUESTION_LIMIT:-8}
+      - DEMO_GLOBAL_DAILY_CAP=${DEMO_GLOBAL_DAILY_CAP:-300}
     volumes:
-      # Index and quota state persist across restarts. The index is built
-      # once at deploy time, not on every boot.
-      - ./data:/app/data
-    healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://localhost:8501/_stcore/health"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
+      # Index and quota state persist across restarts.
+      - ../data:/app/data
+    expose:
+      - "8000"
+
+  web:
+    build:
+      context: ..
+      dockerfile: Dockerfile.frontend
+    image: telecom-rag-web:latest
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      - api

@@ -117,7 +117,7 @@ Every non-trivial choice in this project, with the alternatives that were reject
 - **Rejected alternatives:** Always answer with a confidence caveat — caveats do not stop invention, and users ignore them. LLM self-assessment of sufficiency — the model is a poor judge of its own ignorance.
 - **Consequences:** Some answerable questions get refused. That trade-off must be quantified, not hidden.
 - **Evidence:** —
-D-009 observation (13 Aug, pre-sweep): first end-to-end trace showed an out-of-corpus question (LTE X2 handover) scoring 0.634 on the reranker, above the provisional τ=0.35. The relevance gate did not fire; the abstention came from the model declaring insufficiency instead. Confirms the reranker score is not calibrated for corpus membership and that τ must be set empirically, not guessed. Sweep range widened to 0.3–0.85 for RUN-006.
+
 ---
 
 ### D-010 — Post-generation groundedness verification
@@ -219,3 +219,36 @@ reuse audit and the Groq free-tier constraint analysis.
 - **Status:** SUPERSEDES D-005
 - **Rationale:** BM25 is handled separately by `rank_bm25`, so Qdrant's native hybrid support — the main reason to prefer it — is no longer needed. Chroma already works in the fork base and adds no container to the compose stack. Simplicity wins on a one-day build.
 - **Consequences:** Weaker "cloud-native" story than Qdrant. Accepted; Docker/K8s carries that instead.
+
+### D-027 — Generation moved to `llama-3.1-8b-instant`
+- **Status:** DECIDED · 2026-08-14
+- **Context:** `llama-3.3-70b-versatile` returned 429 during UI testing. Live response headers showed the real limits: **1000 requests per DAY** on the 70B model versus **14400** on `8b-instant`. The binding constraint for a public demo is the daily request cap, not the token rate — at 3 calls per turn, 1000/day is roughly 330 questions across *all* visitors, and development had already consumed most of it before the link could be shared.
+- **Decision:** Use `8b-instant` for generation as well as verification.
+- **Rationale:** 14× the daily headroom. The quality cost is real but bounded, because the pipeline is explicitly designed not to depend on the generator being careful — citations are validated deterministically, every claim is checked by entailment against its cited clause, and unparseable output fails closed. **A weaker generator degrades coverage, not correctness.** That property was built for other reasons and turns out to make this swap safe.
+- **Rejected alternatives:** Keep 70B and accept the demo dying mid-evaluation — unacceptable for a shared link. Pay for a higher tier — not available. Route generation to 70B and fall back to 8B on 429 — better, and the right answer with more time, but it makes measured results non-reproducible because the same question can be answered by different models.
+- **Consequences:** Expect more JSON parse failures and weaker instruction-following from the smaller model. Both are measurable: parse-failure rate is already an eval metric. **Re-measure before quoting numbers** — the RUN-001 baseline was recorded on 70B and is not comparable.
+- **Evidence:** measured from `x-ratelimit-*` headers, 2026-08-14.
+
+### D-028 — SQLite for conversation persistence, not Postgres
+- **Status:** DECIDED · 2026-08-14
+- **Context:** Conversations lived in a Python dict and were lost on restart; the frontend held `session_id` only in React state, so a page refresh silently started a new conversation. For a system presented as production-shaped, that reads as a prototype.
+- **Decision:** SQLite in the mounted `data/` volume, plus `session_id` in `localStorage` and a conversation list in the sidebar.
+- **Rationale:** The deployment is one API container on one host. Postgres would add a service to run, back up and monitor in exchange for multi-replica state sharing this deployment cannot use. The schema avoids SQLite-specific types, so moving to Postgres is a driver change if a second replica is ever needed.
+- **Rejected alternatives:** Postgres/Supabase — correct at multi-replica scale, unjustifiable infrastructure here. Redis — fast, but conversations are durable records, not cache. Keep in-memory — the behaviour being fixed.
+- **What is stored, and what is not:** turns, citations, confidence and abstention reasons are stored, because being able to show *why* an answer was refused days later is the point of the system. Retrieved chunk **bodies** are not — they are reproducible from the index by `chunk_id`, and duplicating spec text per turn would grow the database without adding information.
+- **Ownership:** conversation reads and deletes check the visitor cookie, so an id pasted into a URL cannot open someone else's history. This is fair-use scoping, not authentication.
+
+### D-029 — Commit the built index to the repository
+- **Status:** DECIDED · 2026-08-14
+- **Context:** The deployed container needs a populated index to answer anything. Two options: ship the source PDFs and rebuild on the server, or commit the built artefacts.
+- **Decision:** Commit `chroma/`, `chunks.json` and `bm25.pkl` (~20 MB). Source PDFs stay out — they are large and redistributable from ETSI.
+- **Rationale:** Rebuilding on deploy means shipping PDFs, running a multi-minute CPU embedding job at boot, and accepting that any failure there yields a live site that silently retrieves nothing. Committing derived data is normally poor practice; here it buys a deterministic deploy, and the alternative failure mode is a broken demo in front of a recruiter.
+- **Consequences:** The index must be rebuilt and re-committed when the corpus or embedding model changes. `CFG.collection` is versioned and the store raises on model mismatch (E-000g), so a stale index fails loudly rather than silently.
+
+### D-030 — Classify intent before retrieval; non-questions are free
+- **Status:** DECIDED · 2026-08-14
+- **Context:** E-021 — a greeting was rewritten into the previous question and answered with a real citation. Separately, greetings were consuming the visitor's 8-question quota.
+- **Decision:** A rule-based classifier runs before retrieval and routes GREETING, META and UNCLEAR to direct responses: no retrieval, no LLM call, no quota consumed. Only SPEC_QUESTION and FOLLOW_UP enter the pipeline.
+- **Rationale:** Adapted from TravelMaster, where only `NEW_TRIP`/`MODIFY_TRIP` are billable turns. Rule-based rather than LLM-based because greetings are a small closed set of phrasings, and spending an LLM call to recognise "hi" would add latency and consume the very budget the classifier exists to protect.
+- **Rejected alternatives:** LLM classifier — more robust on unusual phrasings, but adds a call to every turn including the ones it is meant to make free. Handle it in the prompt — too late; by then the rewriter has already fabricated the question. No classification — the status quo that produced E-021.
+- **Consequences:** Rules will miss unusual greetings. The failure mode is safe: an unrecognised greeting is treated as a question and abstained on, rather than silently answered as something else. UNCLEAR deliberately asks the user to rephrase rather than guessing — inferring an unasked question is precisely the behaviour the system exists to prevent.

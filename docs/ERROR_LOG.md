@@ -230,3 +230,95 @@ Delete any that do not occur; fill in the rest when they bite. They are listed h
 - **Impact:** this was the dominant cause of the 30/47 abstentions in RUN-001, not the relevance gate, not the prompt, and not retrieval — all of which were investigated first.
 - **Wider point:** **a validator must not be stricter than the format its own prompt demonstrates.** The prompt showed one shape and the checker demanded another. Worth noting the failure was *safe* — it abstained rather than emitting a bad citation — but silently destroying correct answers is still a serious defect, and the fail-closed design made it look like a retrieval problem.
 - **Related:** D-010, FR-06, DEF-01
+
+### E-017 — A single chat turn hung for minutes with no output
+- **Date / phase:** 2026-08-14 / React UI testing
+- **Symptom:** The third turn of a conversation never returned. The uvicorn log showed no error and no new request completing; the UI spun indefinitely with no indication of why.
+- **Root cause:** Three faults compounding.
+  1. **Call amplification.** One turn had grown to **five sequential LLM calls** — query rewrite, generation, then one verification call *per claim*. A three-claim answer therefore cost five round trips.
+  2. **Pacer sleeping silently.** Near the 12,000 TPM ceiling the token bucket sleeps up to 60 s per call, so five calls could stack into minutes. It logged with `print()`, which from a worker thread inside uvicorn does not reliably reach the console — so the wait produced *no output at all*.
+  3. **No timeout anywhere.** Not in the Groq request, not in the pipeline, not in the frontend fetch. There was no path by which a slow turn could end in anything other than an indefinite spinner.
+- **Fix:** Batch verification into a single call for all claims (5 calls → 3, accuracy unchanged since each claim is still judged only against its own cited passage); log pacer waits through the `logging` module; add a 30 s per-request timeout, a 75 s total pipeline budget, and an explicit timeout abstention with an honest message.
+- **Design note:** the timeout path abstains rather than returning partial results. Emitting unverified claims to save time would violate the property the whole system exists to guarantee (NFR-03).
+- **Wider point:** each feature added one more LLM call — the rewrite for multi-turn, the verifier for grounding — and nobody was counting. **Per-request call amplification needs a budget from the start**, in the same way token cost does.
+- **Related:** D-018, D-019, D-024, NFR-01, E-013
+
+### E-018 — Every first request after a restart timed out (cold model load)
+- **Date / phase:** 2026-08-14 / React UI testing
+- **Symptom:** First question after restarting the API took **102.3 s** and abstained with `timeout_before_generation` — while reporting confidence 1.000 and three correctly retrieved clauses. The message blamed rate limiting; no LLM call had been made.
+- **Root cause:** `bge-small` and the cross-encoder load lazily on first use. On a cold process that is ~100 s of CPU, and it happened *inside* the request, so it consumed the 75 s pipeline budget before generation was reached. The timeout message then attributed the failure to the API provider — a misleading error for a cause that was entirely local.
+- **Fix:** Warm the models in a FastAPI `lifespan` handler so loading happens at boot, where the container health check already allows for it (`start-period=45s`). `/health` now reports `ready` and `warmup_s` so the UI can distinguish "still warming" from "broken". The pipeline budget clock also restarts after retrieval, since it exists to bound LLM stalls, not local compute.
+- **Why it mattered more than the delay:** on a deployed demo this is the **recruiter's first click**. A cold container would have shown a timeout blaming rate limits on a question the system answers perfectly.
+- **Wider point:** lazy loading is invisible in development, where the process is already warm from a previous run. It only appears on a cold start, which is exactly the path a reviewer takes and the one least likely to be tested.
+- **Related:** E-017, D-014, NFR-05
+
+### E-019 — Demo model chosen on token rate, not daily request cap
+- **Date / phase:** 2026-08-14 / UI testing
+- **Symptom:** `429 Too Many Requests` on the second question of a session, after a fresh restart, with the token-per-minute budget nowhere near exhausted.
+- **Root cause:** Model selection considered only TPM. The live headers show `llama-3.3-70b-versatile` has **12000 TPM but only 1000 requests per day**, while `llama-3.1-8b-instant` has **6000 TPM and 14400 per day**. The 70B model was chosen for quality on the basis of the *per-minute* figure; the *per-day* figure is what actually governs a shared public demo. At 3 calls per turn that is ~330 questions for every visitor combined, and a day of development consumes it before the link is ever shared.
+- **Fix:** Generation moved to `8b-instant` (D-027).
+- **Why the swap is safe, and why that is not luck:** the pipeline never trusts the generator. Citations are validated deterministically, claims are verified by entailment against the cited clause, and unparseable output fails closed. A weaker model produces more refusals, not more wrong answers. The property was built to contain hallucination and turns out to contain model downgrades too.
+- **Wider point:** rate limits have more than one dimension. Reading only the one that matched the mental model (tokens, because chunk size dominated the design) meant the binding constraint went unnoticed until it fired in front of a working UI.
+- **Related:** D-011, D-017, D-027, E-013
+
+### E-020 — Small-model output quality, and an unresettable demo quota
+- **Date / phase:** 2026-08-14 / after the D-027 model swap
+- **Symptom (a):** `llama-3.1-8b-instant` answered "An integer value" where the 70B model had written a full sentence, and emitted a claim as `d) An integer value` — copying the 3GPP structural list marker verbatim. Correct, cited, and unreadable to anyone who has not seen the source clause.
+- **Root cause (a):** The prompt asked for claims but never specified that they be self-contained sentences. The 70B model inferred it; the smaller model did not. Measurement clauses are laid out as `a) description  b) CC  d) An integer value`, so lifting the marker along with the content is a faithful reading of a badly-shaped instruction.
+- **Fix (a):** Prompt now requires a complete sentence that restates the question, plus a regex marker strip at parse time — belt and braces, because a small model will not always comply.
+- **Symptom (b):** After the swap, the input box locked at "0 of 8 questions remaining" after a single question.
+- **Root cause (b):** Not a bug in the counter — the quota cookie had persisted across the whole day's testing, so the browser had genuinely used its 8. But the only way to reset was deleting a file on the server *and* clearing browser cookies, which is impossible mid-interview on a deployed box.
+- **Fix (b):** `POST /api/v1/quota/reset`, and `GET /api/v1/quota` now reports the caller's own remaining count. Unauthenticated but deliberately narrow — it can only clear a counter — and disableable with `DEMO_ALLOW_RESET=false`.
+- **Wider point:** a prompt tuned against a capable model encodes assumptions that only surface when the model is downgraded. Instructions that rely on the reader "knowing what is meant" are the first thing to break.
+- **Related:** D-027, E-019
+
+### E-021 — A greeting was answered as the previous question, with a real citation
+- **Date / phase:** 2026-08-14 / voice input testing
+- **Symptom:** The user said **"Hello, hello, hello."** The system replied *"The measurement is reported as an integer value"* with a verified claim and a valid clause citation — answering the question from two turns earlier.
+- **Root cause:** `needs_rewrite()` treated any input of four words or fewer as a context-dependent follow-up. The rewriter dutifully resolved the "reference" into the previous question, and everything downstream then worked perfectly on a question the user never asked. Voice input made it common: dictation produces short, repeated utterances.
+- **Fix:** Intent classification before anything else (`app/chat/intent.py`), following the pattern in TravelMaster's `chat_routes.py`. Greetings, meta questions and unclear input are answered directly with no retrieval, no LLM call and **no quota consumed**. `needs_rewrite` now requires a genuine dependency marker, not merely shortness.
+- **Why this is the most serious defect found in the project:** every other control in the system verifies that the **answer** is supported by the sources. **None of them verify that the question was the one the user asked.** The citation was real, the claim was grounded, the confidence was 1.000 — and the entire response was to a fabricated question. A visitor typing "hi" would have received a confident, cited answer to something they never asked, and nothing in the pipeline would have flagged it.
+- **Wider point:** grounding controls answer "is this claim supported?" They cannot answer "is this the right question?" Query transformation sits *upstream* of every safety mechanism, so a bug there is invisible to all of them. Any rewrite step needs its own guard — and it should fail toward asking the user rather than guessing.
+- **Related:** D-024, D-030, FR-15
+
+### E-022 — A helper function hijacked the /chat route
+- **Date / phase:** 2026-08-14 / after adding the intent gate
+- **Symptom:** `POST /api/v1/chat` returned 500 with `ResponseValidationError: Input should be a valid dictionary or object` — and the rejected input was the **corpus summary string**, not a chat response.
+- **Root cause:** A patch inserted `_corpus_summary()` between `@router.post("/chat", response_model=ChatResponse)` and the `chat` function it was meant to decorate. Python applies a decorator to whatever function follows it, so the route was registered against `_corpus_summary`, which returns a string. FastAPI then tried to validate that string against `ChatResponse`.
+- **Fix:** Moved the helper above the decorator. Added a test asserting that every route binds to its intended handler by name.
+- **Why it was hard to read:** the traceback pointed at `serialize_response` and named `_corpus_summary` only as the *source of the input*, not as the handler. The error looked like a response-model mismatch rather than a routing bug.
+- **Wider point:** this class of error is invisible to import checks, type checkers and `compileall` — the code is entirely valid Python and valid FastAPI. Only a request exercises it. Route-binding assertions are cheap and catch it at test time.
+
+### E-023 — Input validation rejected the inputs the greeting path exists for
+- **Date / phase:** 2026-08-14 / testing the intent gate
+- **Symptom:** `POST /chat` with `{"question": "hi"}` returned **422** — `String should have at least 3 characters`.
+- **Root cause:** `ChatRequest.question` carried `min_length=3` from the original single-turn design, when the shortest sensible input was a real question. The intent classifier added later is built precisely to handle one- and two-character inputs safely ("hi" → GREETING, "5QI" → UNCLEAR), but the request never reached it. Two layers held contradictory beliefs about what counts as valid input, and the stricter one won silently.
+- **Fix:** `min_length=1`. The classifier, not the schema, decides whether input is actionable — and it is designed to fail toward asking the user rather than guessing.
+- **Wider point:** a constraint that was correct when written became wrong when a new layer changed the assumptions beneath it. Nothing flagged the contradiction because each layer was individually reasonable. Tests now assert that anything the validator accepts, the classifier can classify — pinning the two together rather than leaving them to drift.
+- **Related:** D-030, E-021
+
+### E-024 — Rule-based intent classification cannot cover conversational English
+- **Date / phase:** 2026-08-14 / intent gate testing
+- **Symptom:** "so whats your name" was classified as a specification question, consumed a quota slot, retrieved three irrelevant clauses at confidence 0.001, and returned a specification refusal. To a user that reads as a broken system, not a careful one.
+- **Root cause:** The classifier was a fixed regex list built from the greetings I happened to think of. It caught "hi" and "what can you do" but not "whats your name", "how are you", "who built you", or any of the unbounded set of ways people open a conversation. Rules can enumerate greetings; they cannot enumerate conversational English.
+- **Fix:** Two stages. Rules still handle the common cases for free. Anything short with no telecom vocabulary is marked AMBIGUOUS and resolved by one cheap LLM call (~80 tokens on the small model) that decides CONVERSATIONAL vs TECHNICAL. It fires rarely, because real specification questions almost always contain domain terms.
+- **Failure direction, chosen deliberately:** the fallback defaults to CONVERSATIONAL when the classifier is unavailable. Replying conversationally to a technical question is a mild annoyance; refusing a greeting with a specification disclaimer looks like a malfunction.
+- **Wider point:** the earlier fix (E-021) was right about *where* the problem was and wrong about *how much* rules could carry. A closed-set solution to an open-set problem works exactly until someone phrases it differently — which, for a public demo, is the first visitor.
+- **Related:** D-030, E-021
+
+### E-025 — Upload required users to rename the file they had just downloaded
+- **Date / phase:** 2026-08-14 / first real upload test
+- **Symptom:** Uploading `ts_128554v180500p.pdf` — the exact filename etsi.org serves — produced the warning *"Filename did not match the TS_&lt;number&gt;_v&lt;version&gt;.pdf convention, so citations will show the filename instead of a spec number."* Every citation from that document then read `ts_128554v180500p` rather than `TS 28.554`.
+- **Root cause:** `spec_meta_from_filename` only understood the convention *I* invented for my own corpus. ETSI's naming (`ts_128554v180500p`) is what a user actually has on disk, and ETSI numbers 3GPP specs with a leading 1 — `TS 128 554` is 3GPP `TS 28.554` — which the parser knew nothing about.
+- **Fix:** Three-tier identity resolution, most reliable first: the running header printed inside the document (`3GPP TS 28.554 version 18.5.0 Release 18`), then the filename in either ETSI's format or mine, then the bare filename. Content wins because a file can be renamed and its header cannot.
+- **Wider point:** the convention was fine for a corpus I curated and wrong the moment a user was involved. Anything that asks a user to reformat their input to suit an internal parser is a defect in the parser. The information was in the document all along — the code was reading the wrong source.
+- **Related:** D-002, FR-14
+
+### E-026 — Uploaded documents indexed successfully, then were invisible to every question
+- **Date / phase:** 2026-08-14 / upload end-to-end test
+- **Symptom:** Uploading TS 28.554 reported *"Indexed TS 28.554 — 140 clauses"*. Asking a question that only that document answers ("What is the KPI for NG-RAN handover success rate?", defined in its clause 6.6.1) retrieved three passages from the **base corpus** and abstained. Nothing in the logs indicated a problem — the upload succeeded and retrieval succeeded, they simply had nothing to do with each other.
+- **Root cause:** Two session subsystems coexisting. `/chat` had been migrated to the SQLite `app.chat.store` (D-028), but `/upload` still used the superseded in-memory `app.chat.session.STORE`. Each minted its own identifier, so uploaded chunks were tagged `owner: <in-memory id>` while retrieval filtered on `owner: <sqlite conversation id>`. The filter worked perfectly and matched nothing.
+- **Fix:** `/upload` now resolves the conversation through the same store as `/chat`. Added a test asserting `routes.py` no longer imports the superseded module.
+- **Why it was invisible:** every individual component reported success. The upload confirmed a clause count, retrieval returned results, the abstention was correct given what it retrieved. Only an end-to-end test with a question answerable *solely* from the uploaded document could expose it — which is precisely the test that had never been run.
+- **Wider point:** a migration that leaves the old subsystem importable leaves a trap. The dead code compiled, imported and ran; it just operated on a parallel universe of identifiers. Deleting or hard-failing the superseded path would have surfaced this at import time instead of as a silent retrieval miss.
+- **Related:** D-026, D-028, FR-14
