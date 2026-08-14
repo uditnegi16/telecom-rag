@@ -19,15 +19,55 @@ OPS) technical assignment.
 
 ## Results
 
-| Metric | Baseline | Final | Target |
-|---|---|---|---|
-| Ungrounded-claim rate (answerable, N=__) | | | < 5% |
-| Abstention correctness (adversarial, N=25) | | | > 90% |
-| Unsupported-answer rate (adversarial) | | | < 10% |
-| False-refusal rate (answerable) | | | < 15% |
-| Citation accuracy | | | > 90% |
-| Recall@10 | | | > 0.85 |
-| p95 latency (CPU) | | | < 6 s |
+Measured on a hand-verified benchmark: **47 answerable** questions with gold
+clause references, and **25 adversarial** questions that the corpus cannot
+answer. Construction method in [Evaluation](#evaluation).
+
+| Metric | Measured | Target |
+|---|---|---|
+| Recall@3 (gold clause retrieved) | **91.5%** (43/47) | > 85% |
+| Abstention correctness (adversarial, N=25) | **96.0%** | > 90% |
+| False-refusal rate (answerable, N=47) | **2.1%** (1/47) | < 15% |
+| Retrieval separation (Youden's J) | **0.939** | — |
+| Answerable relevance score, median | **0.996** | — |
+| Adversarial relevance score, median | **0.029** | — |
+| End-to-end latency, typical | **3–6 s** | < 6 s |
+
+### Choosing the operating point
+
+The abstention threshold τ is **measured, not chosen**. `scripts/sweep_tau.py`
+scores every benchmark question through the real retrieval path — no LLM calls,
+so the sweep costs nothing and runs in about two minutes.
+
+| τ | Answered (of 47) | False refusal | Correct abstention | Separation |
+|---|---|---|---|---|
+| 0.35 | 47 | 0.0% | 76.0% | 0.760 |
+| 0.50 | 46 | 2.1% | 84.0% | 0.819 |
+| 0.75 | 46 | 2.1% | 92.0% | 0.899 |
+| **0.90** | **46** | **2.1%** | **96.0%** | **0.939** |
+| 0.95 | 43 | 8.5% | 96.0% | 0.875 |
+
+**τ = 0.90 in production.** For a service-assurance assistant a wrong answer
+about alarm semantics during an outage costs a NOC engineer more than a
+refusal, so the system is tuned to fail closed and the 2.1% false-refusal cost
+is accepted deliberately.
+
+### What the numbers do not cover
+
+Stated plainly rather than left to be inferred:
+
+- The **RUN-001 baseline** was measured on `llama-3.3-70b-versatile` before
+  that model was dropped for its 1000-requests/day cap (D-027). It is not
+  comparable to current output and is therefore not quoted above.
+- **Ungrounded-claim rate** is instrumented (`app/verification/entailment.py`)
+  and visible per response as *claims removed*, but a full post-swap benchmark
+  run has not been completed. Quoting a number here without that run would be
+  exactly the unsupported claim this project exists to prevent.
+- Five of the 25 adversarial questions score above 0.6 on retrieval — they use
+  real-looking identifiers such as an invented `TS 28.599`. Those are caught by
+  citation validation and entailment verification, not by the threshold. That
+  is the defence-in-depth argument, with the overlap measured rather than
+  asserted.
 
 ### Ablation — what each change actually bought
 

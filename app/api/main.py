@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import time
 from contextlib import asynccontextmanager
 
@@ -66,11 +67,32 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# CORS for a split deployment (frontend on Amplify, API on EC2).
+#
+# allow_origins=["*"] CANNOT be used here: browsers reject wildcard origins
+# whenever the request carries credentials, and the quota cookie requires
+# `credentials: "include"`. Origins must therefore be listed explicitly
+# (ERROR_LOG E-027).
+#
+# Set ALLOWED_ORIGINS to a comma-separated list, e.g.
+#   ALLOWED_ORIGINS=https://main.d1abc2def3.amplifyapp.com
+_origins = [
+    o.strip() for o in os.getenv("ALLOWED_ORIGINS", "").split(",") if o.strip()
+]
+if not _origins:
+    # Local development default. In production ALLOWED_ORIGINS must be set;
+    # without it the deployed frontend cannot call this API at all - a loud
+    # failure, which is preferable to a silently insecure wildcard.
+    _origins = ["http://localhost:5173", "http://localhost:3000"]
+    log.warning("ALLOWED_ORIGINS not set; allowing local dev origins only")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_origins,
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["X-Process-Time"],
 )
 
 app.include_router(router, prefix="/api/v1")

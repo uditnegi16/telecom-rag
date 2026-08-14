@@ -45,7 +45,16 @@ class Config:
     reranker_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
 
     # --- abstention (D-009) -- THE tuned parameter, swept in RUN-006 --------
-    tau_abstain: float = 0.35
+    # MEASURED, not guessed (scripts/sweep_tau.py, RUN-006). On 47 answerable
+    # and 25 adversarial questions: answerable median 0.996, adversarial
+    # median 0.029. At 0.90 -> 46/47 answered, 2.1% false refusal, 96%
+    # abstention correctness (Youden J = 0.939).
+    #
+    # This was reverted to a guessed 0.35 by a later patch that shipped the
+    # whole file; at 0.35 the gate lets 24 of 25 adversarial questions through
+    # and the fail-closed behaviour rests entirely on the second line of
+    # defence (ERROR_LOG E-030).
+    tau_abstain: float = 0.90
 
     # --- generation (D-011, D-019, D-027) ----------------------------------
     # Measured free-tier limits (from live x-ratelimit response headers):

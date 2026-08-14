@@ -119,14 +119,36 @@ def _visitor_id(request: Request, response: Response) -> str:
     vid = request.cookies.get("demo_visitor")
     if not vid:
         vid = secrets.token_urlsafe(16)
-        response.set_cookie("demo_visitor", vid, max_age=86400,
-                            httponly=True, samesite="lax")
+        # SameSite=None + Secure is REQUIRED for a split deployment: with the
+        # frontend on one domain and this API on another, the cookie is
+        # third-party, and Chrome drops third-party cookies set with
+        # SameSite=Lax. Quota would then silently reset on every request
+        # (E-027). SameSite=None requires Secure, hence HTTPS on the API.
+        import os as _os
+        cross_site = _os.getenv("CROSS_SITE_COOKIES", "false").lower() == "true"
+        response.set_cookie(
+            "demo_visitor", vid, max_age=86400, httponly=True,
+            samesite="none" if cross_site else "lax",
+            secure=cross_site,
+        )
     return vid
+
+
+def _display_chunk_id(chunk_id: str) -> str:
+    """Strip the internal session namespace from a chunk id.
+
+    Uploaded chunks are namespaced `<session8>__<real id>` so two sessions
+    uploading the same file cannot collide. That prefix is plumbing, and
+    showing it in a citation makes the reference unreadable - a user sees
+    `552b9118__TS28554_6.6.5` where `TS28554_6.6.5` is the actual clause
+    address (E-031).
+    """
+    return chunk_id.split("__", 1)[-1] if "__" in chunk_id else chunk_id
 
 
 def _src(c: dict) -> dict:
     return {
-        "chunk_id": c.get("chunk_id", ""),
+        "chunk_id": _display_chunk_id(c.get("chunk_id", "")),
         "spec_id": c.get("spec_id", ""),
         "spec_version": c.get("spec_version", ""),
         "clause_id": c.get("clause_id", ""),
@@ -333,8 +355,9 @@ def chat(req: ChatRequest, request: Request, response: Response):
 
     return ChatResponse(
         answer=res.get("answer"),
-        claims=[Claim(**c) for c in res.get("claims", [])],
-        citations=res.get("citations", []),
+        claims=[Claim(claim=c["claim"], citation=_display_chunk_id(c["citation"]))
+                for c in res.get("claims", [])],
+        citations=[_display_chunk_id(c) for c in res.get("citations", [])],
         sources=[Source(**_src(s)) for s in res.get("source_chunks", [])],
         confidence=res.get("confidence", 0.0),
         abstained=res.get("abstained", False),

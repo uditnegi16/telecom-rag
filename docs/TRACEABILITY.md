@@ -19,9 +19,9 @@ Every requirement traced to the decision that shaped it, the module that impleme
 | FR-07 Abstention | **D-009 relevance gate** | `app/generation/confidence.py` | `tests/unit/test_confidence.py` | abstention correctness, false-refusal rate | RUN-006 |
 | FR-08 Suppress unentailed claims | D-010 entailment verifier | `app/verification/entailment.py` | `tests/unit/test_entailment.py` | ungrounded-claim rate, claims dropped | RUN-007 |
 | FR-09 REST API | D-021 FastAPI (reused) | `app/api/routes.py` | `tests/integration/test_api.py` | contract test pass | — |
-| FR-10 UI shows evidence | D-013 Streamlit | `ui/streamlit_app.py` | manual | — | — |
+| FR-10 UI shows evidence | D-013 → React (D-028) | `frontend/src/components/EvidencePanel.tsx` | manual | — | — |
 | FR-11 Injection defence | D-022 sanitizer (reused) | `app/security/sanitizer.py` | `tests/unit/test_sanitizer.py` | injection test pass | — |
-| FR-12 Query logging | D-023 logger (reused) | `app/monitoring/logger.py` | `tests/unit/test_logger.py` | rows written | — |
+| FR-12 Query logging | D-023 | `app/api/routes.py` (structured `log.info`) | manual | rows written | — |
 | NFR-01 Groq limits | **D-017, D-018, D-019** | `app/llm/groq_client.py` | `tests/unit/test_token_budget.py` | 429 count, cache hit rate | all runs |
 | NFR-02 Ungrounded rate | D-009 + D-010 | verification chain | eval harness | **ungrounded-claim rate** | RUN-007 |
 | NFR-03 Fail closed | D-009 | `confidence.py` | adversarial set | **unsupported-answer rate** | RUN-006 |
@@ -49,6 +49,8 @@ Confirms no orphan components. Every entry must name a requirement, or be delete
 | `entailment.py` | FR-08, NFR-02 | Retrieval-correct-but-embellished answers pass through |
 | `groq_client.py` | NFR-01 | Evaluation runs abort on rate limits |
 | `sanitizer.py` | FR-11 | Instruction text in a spec passage could steer generation |
+| `intent.py` | FR-15 | A greeting rewritten into the prior question and answered as fact (E-021) |
+| `store.py` | D-028 | Conversations lost on restart; refresh started a new chat |
 
 ---
 

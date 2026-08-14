@@ -79,20 +79,28 @@ class TestContextualizer:
 class TestSessionGrounding:
     """D-025: history must not become a source of facts."""
 
-    def test_history_holds_only_role_and_content(self):
-        from app.chat.session import Session
-        s = Session()
-        s.add_user("q1")
-        s.add_assistant({"answer": "a1", "citations": ["c1"], "confidence": 0.9})
-        for turn in s.history():
+    def test_history_holds_only_role_and_content(self, tmp_path):
+        from pathlib import Path
+        import app.chat.store as st
+        st.DB_PATH = Path(tmp_path) / "t.db"
+        st._conn = None
+        cid = st.create_conversation("v1", "q1")
+        st.add_turn(cid, "user", "q1")
+        st.add_turn(cid, "assistant", "a1", citations=["c1"], confidence=0.9)
+        # Only role and content reach the prompt. Citations, confidence and
+        # abstain reasons are stored for audit but never fed back in.
+        for turn in st.history_for_prompt(cid):
             assert set(turn.keys()) == {"role", "content"}
 
-    def test_turns_are_trimmed(self):
-        from app.chat.session import Session, MAX_TURNS_KEPT
-        s = Session()
-        for i in range(MAX_TURNS_KEPT + 6):
-            s.add_user(f"q{i}")
-        assert len(s.turns) == MAX_TURNS_KEPT
+    def test_history_is_bounded(self, tmp_path):
+        from pathlib import Path
+        import app.chat.store as st
+        st.DB_PATH = Path(tmp_path) / "t2.db"
+        st._conn = None
+        cid = st.create_conversation("v1", "q")
+        for i in range(20):
+            st.add_turn(cid, "user", f"q{i}")
+        assert len(st.history_for_prompt(cid, max_turns=8)) == 8
 
 
 class TestCitationNormalisation:
@@ -227,3 +235,34 @@ class TestSessionSystemConsistency:
             "routes.py still imports the superseded in-memory session store"
         )
         assert "from app.chat import store" in src
+
+
+
+class TestConfigMatchesMeasurements:
+    """E-030: tau was reverted from its measured value to a guess by a patch
+    that shipped the whole config file. The operating point is the single most
+    consequential parameter in the system; it gets a test."""
+
+    def test_tau_matches_measured_optimum(self):
+        import json
+        from pathlib import Path
+        from app.config import CFG
+
+        sweep = Path("eval/results/tau_sweep.json")
+        if not sweep.exists():
+            import pytest
+            pytest.skip("no sweep recorded yet")
+
+        best = json.loads(sweep.read_text(encoding="utf-8"))["best"]["tau"]
+        assert abs(CFG.tau_abstain - best) < 1e-6, (
+            f"CFG.tau_abstain={CFG.tau_abstain} but the measured optimum is "
+            f"{best}. Either re-run scripts/sweep_tau.py or restore the value."
+        )
+
+    def test_generation_model_is_not_the_rate_limited_one(self):
+        """D-027: llama-3.3-70b-versatile has a 1000 requests/DAY cap, which
+        one day of development exhausts before a visitor ever clicks."""
+        from app.config import CFG
+        assert "70b" not in CFG.gen_model, (
+            "70B model has a 1000/day request cap - unusable for a public demo"
+        )

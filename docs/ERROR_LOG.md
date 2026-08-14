@@ -331,3 +331,11 @@ Delete any that do not occur; fill in the rest when they bite. They are listed h
 - **Second fault exposed:** the build ran attached to the SSH session, so losing the connection killed it. Long builds on a remote host must be detached (`nohup`, `tmux`, or `docker compose up -d --build` with logs tailed separately).
 - **Wider point:** a dependency file that accumulated during development became a production liability. Nobody removed streamlit when the React frontend replaced it, because locally it cost nothing but disk. On a memory-constrained host the same unused dependency took the entire machine down. **Production images should install what they run, not what the repository happens to contain.**
 - **Related:** D-013, D-014, NFR-07
+
+### E-029 — Production frontend build failed on a type error dev never showed
+- **Date / phase:** 2026-08-14 / production Docker build
+- **Symptom:** `npm run build` failed inside the web image with `src/services/api.ts(5,26): error TS2339: Property 'env' does not exist on type 'ImportMeta'`. The same code had run cleanly under `npm run dev` for hours.
+- **Root cause:** `import.meta.env.VITE_API_URL` requires Vite's client type declarations. The dev server injects them at runtime, so `npm run dev` never type-checks that path. The production script is `tsc -b && vite build`, and `tsc` has no such injection — it needs `/// <reference types="vite/client" />` and `types: ["vite/client"]` in tsconfig, neither of which was present.
+- **Fix:** Added `src/vite-env.d.ts` declaring `ImportMetaEnv`, and set `types` in `tsconfig.json`.
+- **Wider point:** the dev server and the production build are **different type-checking regimes**. Anything that only runs under `vite build` — strict `tsc`, `noUnusedLocals`, tree-shaking — is unverified until the first production build. On this project that first build happened during deployment, on a remote host, at the end of the day. Running `npm run build` once locally would have caught it in five seconds.
+- **Related:** D-013, NFR-06

@@ -29,9 +29,6 @@ api:            ## FastAPI backend on :8000
 web:            ## React frontend on :5173 (proxies /api to :8000)
 	cd frontend && npm run dev
 
-ui:             ## legacy Streamlit prototype
-	streamlit run ui/streamlit_app.py
-
 sweep-tau:      ## Choose the abstention threshold. Retrieval only, ZERO tokens.
 	python -m scripts.sweep_tau
 

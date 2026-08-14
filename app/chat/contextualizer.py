@@ -19,7 +19,7 @@ WHY IT IS ALSO A HALLUCINATION CONTROL
 The rewrite uses history to resolve references ONLY. It never carries facts
 forward. Every turn re-retrieves and re-verifies against the corpus from
 scratch, so an answer given in turn 3 cannot be built on an unverified claim
-from turn 1. See `app/chat/session.py` for why that rule exists.
+from turn 1. See `app/chat/store.py` for why that rule exists.
 
 The rewritten query is returned and displayed, because a wrong rewrite
 produces a confidently wrong retrieval, and the user needs to see what was
