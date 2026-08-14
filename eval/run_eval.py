@@ -61,7 +61,7 @@ def evaluate(
     """
     if smoke:
         answerable = load("smoke_set.json")
-        adversarial = []
+        adversarial = load("smoke_adversarial.json")
     else:
         answerable = load("golden_set.json")
         adversarial = load("adversarial_set.json")

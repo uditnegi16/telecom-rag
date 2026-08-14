@@ -24,8 +24,29 @@ An unresolvable citation is now a hard failure. Never substitute.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Dict, List
+
+
+def normalise(cid: str) -> str:
+    """Strip decoration the model copies from the prompt's source labels.
+
+    ERROR_LOG E-016: sources were labelled "[TS28552_5.5.7.1.3] TS 28.552 ...",
+    so the model returned the id WITH the brackets. Exact string matching then
+    rejected a perfectly correct citation as fabricated, and the answer was
+    thrown away. This was the dominant cause of abstentions in RUN-001 - not
+    the relevance gate, not the prompt, and not retrieval.
+
+    A validator that is stricter than its own prompt's formatting will reject
+    correct output. Normalise the shape, keep the identity check strict.
+    """
+    if not cid:
+        return ""
+    out = cid.strip()
+    out = re.sub(r"^[\[\(<{'\"]+|[\]\)>}'\"]+$", "", out).strip()
+    out = re.sub(r"^(source|chunk|id)\s*[:=]\s*", "", out, flags=re.I).strip()
+    return out
 
 
 @dataclass
@@ -51,16 +72,18 @@ def validate_citations(
     if not cited_ids:
         return CitationResult(False, "no citation supplied", [], [])
 
-    retrieved = set(retrieved_ids)
+    retrieved = {normalise(r) for r in retrieved_ids}
+    known = {normalise(k) for k in known_ids} if known_ids is not None else None
     fabricated, out_of_context = [], []
 
-    for cid in cited_ids:
+    for raw in cited_ids:
+        cid = normalise(raw)
         if cid in retrieved:
             continue
-        if known_ids is not None and cid in known_ids:
-            out_of_context.append(cid)
+        if known is not None and cid in known:
+            out_of_context.append(raw)
         else:
-            fabricated.append(cid)
+            fabricated.append(raw)
 
     if fabricated:
         return CitationResult(
@@ -77,4 +100,10 @@ def validate_citations(
 
 
 def cited_chunk_map(chunks: List[dict]) -> Dict[str, dict]:
-    return {c["chunk_id"]: c for c in chunks}
+    """Keyed by BOTH raw and normalised id so downstream lookups (entailment
+    verification) resolve a decorated citation too."""
+    out: Dict[str, dict] = {}
+    for c in chunks:
+        out[c["chunk_id"]] = c
+        out[normalise(c["chunk_id"])] = c
+    return out

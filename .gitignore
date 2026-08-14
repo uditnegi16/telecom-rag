@@ -10,3 +10,4 @@ data/processed/bm25.pkl
 eval/results/*.json
 !eval/results/.gitkeep
 .pytest_cache/
+data/processed/chunks.json

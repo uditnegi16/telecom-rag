@@ -61,6 +61,7 @@ def build_answer_fn(
     llm=None,
     tau: float | None = None,
     verify: bool = True,
+    suppress: bool = True,
 ) -> Callable[[str], dict]:
     """Return `answer(question) -> dict` in the shape eval/run_eval.py expects.
 
@@ -77,14 +78,29 @@ def build_answer_fn(
         retrieve_fn = retrieve_fn or build_retrieve_fn()
         llm = llm or _get_llm()
 
-    def answer(question: str) -> dict:
+    def answer(question: str, history: list | None = None) -> dict:
+        # --- node: contextualise (FR-13, D-024) ----------------------------
+        # A follow-up like "what about for the SMF?" is unretrievable as
+        # written. History resolves the reference; it never supplies facts.
+        from app.chat.contextualizer import contextualize
+
+        search_query, rewritten = contextualize(question, history or [], llm=llm)
+
         # --- node: retrieve ------------------------------------------------
-        r = retrieve_fn(question)
+        r = retrieve_fn(search_query)
         chunks = r["chunks"]
         retrieved_clauses = [c.get("clause_id", "") for c in chunks]
         conf = gate.confidence_from_retrieval(r["top_score"], len(chunks))
 
         base = {
+            "question": question,
+            # Surfaced because a WRONG rewrite produces a confidently wrong
+            # retrieval, and the user must be able to see what was searched.
+            "rewritten_query": search_query if rewritten else None,
+            # FR-10: the UI must show the evidence, not just the answer.
+            # Exposed even on abstention - seeing WHAT was retrieved is how a
+            # user judges whether a refusal was correct.
+            "source_chunks": chunks,
             "retrieved_clauses": retrieved_clauses,
             "confidence": conf,
             "claim_verdicts": [],
@@ -98,7 +114,10 @@ def build_answer_fn(
             return {**base, **gate.abstain("below_tau", conf)}
 
         # --- node: generate ------------------------------------------------
-        built = prompt_builder.build_prompt(question, chunks)
+        # Generation sees the SEARCH query and the retrieved chunks - never
+        # the conversation history (D-025). Every turn is grounded from
+        # scratch, so a turn-5 claim cannot rest on an unverified turn-2 one.
+        built = prompt_builder.build_prompt(search_query, chunks)
         raw = llm.complete(built["prompt"], json_mode=True)
         parsed = prompt_builder.parse_response(raw)
 
@@ -120,28 +139,40 @@ def build_answer_fn(
 
         # --- node: verify entailment (FR-08) -------------------------------
         chunk_map = citation_check.cited_chunk_map(chunks)
+        # The verifier has TWO roles and they must be controlled separately
+        # (ERROR_LOG E-012):
+        #   verify=True   -> run the entailment check, record verdicts. This is
+        #                    the MEASUREMENT INSTRUMENT and must stay on for
+        #                    every ablation run, or hallucination rate is
+        #                    unmeasurable and the baseline scores a fake 0%.
+        #   suppress=True -> act on the verdicts (drop ungrounded claims,
+        #                    abstain if none survive). This is the SYSTEM
+        #                    FEATURE being ablated.
         verdicts = entailment.verify_claims(
             parsed["claims"], chunk_map, llm=llm if verify else None
         )
-        grounded = [v for v in verdicts if v.supported]
-
         base["claim_verdicts"] = [v.supported for v in verdicts]
 
-        if not grounded:
-            return {**base, **gate.abstain("all_claims_ungrounded", conf)}
+        grounded = [v for v in verdicts if v.supported]
+        if suppress:
+            if not grounded:
+                return {**base, **gate.abstain("all_claims_ungrounded", conf)}
+            emitted = grounded
+        else:
+            emitted = verdicts        # measured but not acted upon
 
         # --- node: emit (ungrounded claims dropped) ------------------------
-        kept_ids = [v.citation for v in grounded]
+        kept_ids = [v.citation for v in emitted]
         return {
             **base,
             "answer": parsed["answer"],
-            "claims": [{"claim": v.claim, "citation": v.citation} for v in grounded],
+            "claims": [{"claim": v.claim, "citation": v.citation} for v in emitted],
             "citations": kept_ids,
             "cited_clauses": [
                 chunk_map[i].get("clause_id", "") for i in kept_ids if i in chunk_map
             ],
             "abstained": False,
-            "claims_dropped": len(verdicts) - len(grounded),
+            "claims_dropped": (len(verdicts) - len(grounded)) if suppress else 0,
         }
 
     return answer

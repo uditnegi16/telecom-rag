@@ -1,0 +1,22 @@
+services:
+  app:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: telecom-rag:latest
+    restart: unless-stopped
+    ports:
+      - "80:8501"
+    environment:
+      - GROQ_API_KEY=${GROQ_API_KEY}
+      - DEMO_QUESTION_LIMIT=8
+      - DEMO_GLOBAL_DAILY_CAP=300
+    volumes:
+      # Index and quota state persist across restarts. The index is built
+      # once at deploy time, not on every boot.
+      - ./data:/app/data
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8501/_stcore/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3

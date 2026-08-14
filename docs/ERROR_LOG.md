@@ -204,3 +204,29 @@ Delete any that do not occur; fill in the rest when they bite. They are listed h
 - **Fix:** Filter the source pool (exclude change-history and structural clauses, require sentence-bearing prose) and require self-contained phrasing in the drafting prompt.
 - **Wider point:** this is why D-012 mandates hand-verification. The generator was not wrong; the *source selection* was. Bad inputs produce plausible outputs, which is the hardest failure mode to notice.
 - **Related:** D-012
+
+### E-014 — UI filename shadowed the application package
+- **Date / phase:** 2026-08-14 / chat UI first launch
+- **Symptom:** `ModuleNotFoundError: No module named 'app.chat'; 'app' is not a package`, raised from inside `ui/app.py` itself — the traceback showed the same file twice.
+- **Root cause:** Streamlit places the running script's directory at the front of `sys.path`. With the UI at `ui/app.py`, the name `app` resolved to that script rather than to the `app/` package, so `import app.chat` looked for a `chat` submodule inside a plain module and failed. The error message is misleading: it reports the *symptom* (`app` is not a package) rather than the cause (the wrong `app` was found).
+- **Fix:** Renamed to `ui/streamlit_app.py` and added an explicit `sys.path` guard inserting the project root ahead of the script directory, so the import order holds regardless of how the app is launched.
+- **Time lost:** ~5 min
+- **Prevention:** Never name an entry-point script after a top-level package in the same project. Applies equally to `main.py`, `test.py`, and any name matching a dependency.
+
+### E-015 — τ hardcoded to a guess after documenting that it must be swept
+- **Date / phase:** 2026-08-14 / demo testing
+- **Symptom:** Nearly every question in the chat UI abstained.
+- **Root cause:** `tau_abstain = 0.35` was invented, not measured — despite D-009 explicitly stating the threshold must be chosen empirically. The sweep, once run, showed the real separation point at **0.90**, and also showed that at 0.35 **all 47 answerable questions passed the gate**, so τ was not in fact causing the abstentions at all. A guessed parameter both was wrong and masked the real bug (E-016) by making the gate the obvious suspect.
+- **Fix:** `scripts/sweep_tau.py`, τ set to 0.90 from measured data.
+- **The sequencing error, which cost more than the bug:** the sweep is retrieval-only — embeddings, BM25 and the cross-encoder all run locally — so it costs **zero API tokens** and about two minutes of CPU. It was scheduled as RUN-006, *after* the generation runs that consumed the entire daily token budget. The cheapest and most decisive measurement in the project was sequenced last. Order experiments by information-per-cost, not by pipeline position.
+- **Measured result:** answerable median 0.996 · adversarial median 0.029 · at τ=0.90, 46/47 answered, 2.1% false refusal, 96% correct abstention (J=0.939).
+- **Related:** D-009, D-017
+
+### E-016 — Correct citations rejected as fabricated because of square brackets
+- **Date / phase:** 2026-08-14 / demo testing
+- **Symptom:** `abstain reason: citation_invalid: fabricated citation(s): ['[TS28552_5.5.7.1.3]']` — with confidence 0.9996 and the gold clause retrieved at rank 1.
+- **Root cause:** The prompt labelled each passage as `[TS28552_5.5.7.1.3] TS 28.552 …`. The model copied the id **including the brackets**, exactly as shown. `validate_citations` did an exact string comparison, so `[TS28552_5.5.7.1.3]` did not match `TS28552_5.5.7.1.3` and a perfectly correct citation was classified as fabricated. Under the fail-closed design that routes straight to abstention, so a correct, well-grounded answer was discarded.
+- **Fix:** Two layers. Normalise citations (strip brackets, quotes, `SOURCE:` prefixes) before comparing, and relabel sources as `SOURCE_ID: <id>` so there is no decoration for the model to copy in the first place.
+- **Impact:** this was the dominant cause of the 30/47 abstentions in RUN-001, not the relevance gate, not the prompt, and not retrieval — all of which were investigated first.
+- **Wider point:** **a validator must not be stricter than the format its own prompt demonstrates.** The prompt showed one shape and the checker demanded another. Worth noting the failure was *safe* — it abstained rather than emitting a bad citation — but silently destroying correct answers is still a serious defect, and the fail-closed design made it look like a retrieval problem.
+- **Related:** D-010, FR-06, DEF-01

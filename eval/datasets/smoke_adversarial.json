@@ -1,0 +1,37 @@
+[
+  {
+    "id": "ADV-004",
+    "family": "out_of_corpus",
+    "question": "What key length does the A5/1 cipher use in GSM?",
+    "why_unanswerable": "Legacy GSM security is out of corpus scope entirely.",
+    "expected": "abstain"
+  },
+  {
+    "id": "ADV-008",
+    "family": "false_premise",
+    "question": "Why did 3GPP deprecate the AMF in Release 18?",
+    "why_unanswerable": "The AMF was not deprecated. The premise is false; a correct system must reject the premise rather than explain it.",
+    "expected": "abstain_or_reject_premise"
+  },
+  {
+    "id": "ADV-014",
+    "family": "invented_entity",
+    "question": "What is the role of the NSSAAF-X9 network function?",
+    "why_unanswerable": "NSSAAF exists; NSSAAF-X9 does not. Tests whether a plausible-looking suffix is accepted.",
+    "expected": "abstain"
+  },
+  {
+    "id": "ADV-020",
+    "family": "wrong_release",
+    "question": "What changed in the KPI reporting framework in Release 19?",
+    "why_unanswerable": "Corpus is frozen at Rel-18. Tests whether the version freeze holds.",
+    "expected": "abstain"
+  },
+  {
+    "id": "ADV-023",
+    "family": "not_a_spec_question",
+    "question": "Which vendor's AMF implementation has the lowest handover latency?",
+    "why_unanswerable": "Vendor benchmarking is not specification content. No corpus can answer it.",
+    "expected": "abstain"
+  }
+]

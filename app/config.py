@@ -45,20 +45,26 @@ class Config:
     reranker_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
 
     # --- abstention (D-009) -- THE tuned parameter, swept in RUN-006 --------
-    tau_abstain: float = 0.35
+    tau_abstain: float = 0.90
 
     # --- generation (D-011, D-019) -----------------------------------------
     gen_model: str = "llama-3.3-70b-versatile"
     verify_model: str = "llama-3.1-8b-instant"   # D-019: cheap verifier tier
     temperature: float = 0.0                     # DEF-05
     max_output_tokens: int = 700
-    prompt_version: str = "v2-json-citations"
+    prompt_version: str = "v4-bare-source-ids"
 
     # --- rate limiting (NFR-01, D-018) -------------------------------------
-    tokens_per_minute: int = 6000
+    # Measured from live response headers, not guessed:
+    #   llama-3.3-70b-versatile : 12000 TPM / 1000 RPD
+    #   llama-3.1-8b-instant    :  6000 TPM / 14400 RPD
+    # Configured to the GENERATION model's limit (E-013).
+    tokens_per_minute: int = 12000
     requests_per_minute: int = 30
     cache_dir: str = "./data/processed/llm_cache"
     cache_enabled: bool = True
+    max_pacer_wait_s: float = 90.0
+    pacer_verbose: bool = True
 
     # --- verification (D-010) ----------------------------------------------
     overlap_prefilter: float = 0.10   # free pre-filter, NOT the real check
