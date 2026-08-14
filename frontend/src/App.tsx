@@ -4,6 +4,7 @@ import Sidebar from "./components/Sidebar";
 import Message from "./components/Message";
 import Composer from "./components/Composer";
 import { api } from "./services/api";
+import { uid } from "./utils/id";
 import type {
   ConversationSummary, CorpusInfo, Message as Msg, StoredTurn,
 } from "./types";
@@ -44,7 +45,7 @@ export default function App() {
 
   const toMessages = (turns: StoredTurn[]): Msg[] =>
     turns.map((t) => ({
-      id: crypto.randomUUID(),
+      id: uid(),
       role: t.role,
       content: t.content,
       response: t.role === "assistant" ? {
@@ -80,10 +81,10 @@ export default function App() {
     setError(null);
     setBusy(true);
 
-    const pendingId = crypto.randomUUID();
+    const pendingId = uid();
     setMessages((m) => [
       ...m,
-      { id: crypto.randomUUID(), role: "user", content: text },
+      { id: uid(), role: "user", content: text },
       { id: pendingId, role: "assistant", content: "", pending: true },
     ]);
 
@@ -116,7 +117,7 @@ export default function App() {
         localStorage.setItem(LS_KEY, res.session_id);
       }
       setMessages((m) => [...m, {
-        id: crypto.randomUUID(), role: "assistant", system: true,
+        id: uid(), role: "assistant", system: true,
         content:
           `Indexed ${res.spec_id} — ${res.chunks_added} clauses from ${res.pages} ` +
           `pages in ${res.seconds}s. It is searchable alongside the base corpus ` +

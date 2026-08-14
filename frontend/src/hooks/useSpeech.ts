@@ -31,7 +31,11 @@ function getRecognition(): SpeechRecognitionLike | null {
 
 export const speechSupported = (): boolean => {
   const w = window as any;
-  return Boolean(w.SpeechRecognition ?? w.webkitSpeechRecognition);
+  const hasApi = Boolean(w.SpeechRecognition ?? w.webkitSpeechRecognition);
+  // Speech recognition requires a SECURE CONTEXT. On plain HTTP the
+  // constructor may exist but microphone access is refused, so the button
+  // would appear and then fail (same root cause as E-032). Hide it instead.
+  return hasApi && window.isSecureContext;
 };
 
 export function useSpeech(onTranscript: (text: string, final: boolean) => void) {

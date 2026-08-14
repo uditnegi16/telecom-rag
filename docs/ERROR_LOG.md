@@ -339,3 +339,28 @@ Delete any that do not occur; fill in the rest when they bite. They are listed h
 - **Fix:** Added `src/vite-env.d.ts` declaring `ImportMetaEnv`, and set `types` in `tsconfig.json`.
 - **Wider point:** the dev server and the production build are **different type-checking regimes**. Anything that only runs under `vite build` — strict `tsc`, `noUnusedLocals`, tree-shaking — is unverified until the first production build. On this project that first build happened during deployment, on a remote host, at the end of the day. Running `npm run build` once locally would have caught it in five seconds.
 - **Related:** D-013, NFR-06
+
+### E-030 — The measured abstention threshold silently reverted to a guess
+- **Date / phase:** 2026-08-14 / full-project review
+- **Symptom:** `CFG.tau_abstain` read **0.35** — the value originally invented before any measurement — despite `scripts/sweep_tau.py` having measured the optimum at **0.90** and the change having been applied earlier the same day.
+- **Root cause:** A later patch shipped the whole of `app/config.py` to pick up an unrelated setting, overwriting the tuned value with the version in my working copy. Nothing failed; the system simply ran at a worse operating point.
+- **Impact:** At τ=0.35 the gate passes **24 of 25** adversarial questions. The fail-closed behaviour observed during testing was therefore coming from the model's own sufficiency judgement and the citation validator — the second and third lines of defence — while the gate credited with it was doing almost nothing. Correct behaviour for the wrong reason is harder to detect than outright failure.
+- **Fix:** τ restored to 0.90, plus a regression test asserting `CFG.tau_abstain` matches the recorded optimum in `eval/results/tau_sweep.json`. A second test asserts the generation model is not the rate-limited 70B (D-027), for the same reason.
+- **Wider point:** **a measured value living in a file that gets shipped wholesale is not durable.** Tuned parameters need either separation from routine configuration or a test that fails when they drift. Shipping whole files is convenient and exactly how this happened.
+- **Related:** D-009, D-027, E-015
+
+### E-031 — Internal session namespace leaked into user-visible citations
+- **Date / phase:** 2026-08-14 / review
+- **Symptom:** Citations for uploaded documents read `552b9118__TS28554_6.6.5` instead of `TS28554_6.6.5`.
+- **Root cause:** Uploaded chunks are namespaced with the first 8 characters of the session id so two sessions uploading the same file cannot collide (a correct measure). That id was then rendered directly in the UI, because nothing distinguished the storage key from the display value.
+- **Fix:** `_display_chunk_id()` strips the namespace at the API boundary, for citations, claims and source panels alike. Storage keys are unchanged.
+- **Wider point:** an identifier that is also shown to a user has two jobs, and they conflict. Uniqueness wants a namespace; readability does not. Separate them at the boundary rather than choosing one.
+
+### E-032 — `crypto.randomUUID` is undefined on plain HTTP, freezing the UI
+- **Date / phase:** 2026-08-14 / first test of the deployed site
+- **Symptom:** On `http://13.233.246.237` the question vanished from the composer and the input locked, as though a request were in flight. The API logs showed **no POST at all** — only `/corpus` and `/conversations` polling. The browser console had: `TypeError: crypto.randomUUID is not a function`.
+- **Root cause:** `crypto.randomUUID` is exposed only in **secure contexts** — HTTPS, or `localhost`. The deployment is plain HTTP addressed by IP, so the function is absent. It was called at the top of the send handler to mint message ids, threw before the fetch was issued, and React never applied the state update. The composer's disabled state was set and never cleared.
+- **Fix:** `frontend/src/utils/id.ts` — use `crypto.randomUUID` where available, fall back to `crypto.getRandomValues` (no secure-context requirement), then `Math.random`. These ids are React keys, not security tokens, so the weaker fallback is acceptable. The same guard was added to voice input, which has the identical restriction.
+- **Why development missed it:** `localhost` **is** a secure context. Every browser API with that restriction works perfectly in development and disappears the moment the app is served from an IP over HTTP. There is no warning; the function is simply not there.
+- **Wider point:** this is the third defect in a row caused by **development and production being different environments** — E-028 (dependency bloat only fatal under a memory-constrained container), E-029 (`tsc` type-checking only run by the production build), and now secure-context APIs. Local success is weak evidence about a deployed system, and the gap is widest exactly where nobody looks.
+- **Related:** E-028, E-029, NFR-06
