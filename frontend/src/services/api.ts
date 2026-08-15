@@ -37,7 +37,16 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   }
 }
 
+export interface HealthInfo {
+  status: string;
+  ready: boolean;
+  chunks_indexed: number;
+  question_limit?: number;
+}
+
 export const api = {
+  health: () => request<HealthInfo>("/health"),
+
   chat: (question: string, sessionId: string | null) =>
     request<ChatResponse>("/chat", {
       method: "POST",

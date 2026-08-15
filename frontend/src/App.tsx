@@ -3,13 +3,17 @@ import { AlertCircle, Radio } from "lucide-react";
 import Sidebar from "./components/Sidebar";
 import Message from "./components/Message";
 import Composer from "./components/Composer";
+import Onboarding, { shouldShowOnboarding } from "./components/Onboarding";
 import { api } from "./services/api";
 import { uid } from "./utils/id";
 import type {
   ConversationSummary, CorpusInfo, Message as Msg, StoredTurn,
 } from "./types";
 
-const QUESTION_LIMIT = 8;
+// Fallback only. The real limit is read from /health, because it is an
+// environment variable on the server and hardcoding it here meant the counter
+// lied whenever it was changed (as it was, from 8 to 12).
+const DEFAULT_QUESTION_LIMIT = 8;
 const LS_KEY = "telecomrag.conversation";
 
 export default function App() {
@@ -21,7 +25,9 @@ export default function App() {
   );
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [corpus, setCorpus] = useState<CorpusInfo | null>(null);
-  const [remaining, setRemaining] = useState(QUESTION_LIMIT);
+  const [questionLimit, setQuestionLimit] = useState(DEFAULT_QUESTION_LIMIT);
+  const [remaining, setRemaining] = useState(DEFAULT_QUESTION_LIMIT);
+  const [showOnboarding, setShowOnboarding] = useState(shouldShowOnboarding);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -68,6 +74,15 @@ export default function App() {
           localStorage.removeItem(LS_KEY);
           setConversationId(null);
         }
+      }
+      try {
+        const h = await api.health();
+        if (h.question_limit) {
+          setQuestionLimit(h.question_limit);
+          setRemaining((r) => (r === DEFAULT_QUESTION_LIMIT ? h.question_limit! : r));
+        }
+      } catch {
+        /* fall back to the default */
       }
       refresh();
     })();
@@ -160,6 +175,7 @@ export default function App() {
 
   return (
     <div className="flex h-screen bg-surface">
+      {showOnboarding && <Onboarding onClose={() => setShowOnboarding(false)} />}
       <Sidebar
         corpus={corpus} conversations={conversations} activeId={conversationId}
         onExample={send} onNew={newConversation} onOpen={openConversation}
@@ -215,7 +231,8 @@ export default function App() {
         </div>
 
         <Composer onSend={send} onUpload={upload}
-          disabled={busy || remaining <= 0} uploading={uploading} remaining={remaining} />
+          disabled={busy || remaining <= 0} uploading={uploading}
+          remaining={remaining} limit={questionLimit} />
       </main>
     </div>
   );

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
 import secrets
 import shutil
@@ -180,6 +181,10 @@ def health():
         "verify_model": CFG.verify_model,
         "tau": CFG.tau_abstain,
         "prompt_version": CFG.prompt_version,
+        # Surfaced so the frontend does not hardcode it. The limit is an
+        # environment variable; a hardcoded copy in the UI lied whenever the
+        # server value changed.
+        "question_limit": int(os.getenv("DEMO_QUESTION_LIMIT", "8")),
     }
 
 

@@ -4,13 +4,14 @@ import clsx from "clsx";
 import { speechSupported, useSpeech } from "../hooks/useSpeech";
 
 export default function Composer({
-  onSend, onUpload, disabled, uploading, remaining,
+  onSend, onUpload, disabled, uploading, remaining, limit,
 }: {
   onSend: (text: string) => void;
   onUpload: (file: File) => void;
   disabled: boolean;
   uploading: boolean;
   remaining: number;
+  limit: number;
 }) {
   const [value, setValue] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
@@ -112,7 +113,7 @@ export default function Composer({
         </div>
 
         <p className="mt-2 text-center text-micro text-ink-faint">
-          {remaining} of 8 questions remaining · shared free-tier key ·
+          {remaining} of {limit} questions remaining · shared free-tier key ·
           attach a PDF or use the microphone
         </p>
       </div>
