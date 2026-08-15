@@ -4,6 +4,7 @@ import Sidebar from "./components/Sidebar";
 import Message from "./components/Message";
 import Composer from "./components/Composer";
 import Onboarding, { shouldShowOnboarding } from "./components/Onboarding";
+import Tour, { shouldShowTour } from "./components/Tour";
 import { api } from "./services/api";
 import { uid } from "./utils/id";
 import type {
@@ -28,6 +29,7 @@ export default function App() {
   const [questionLimit, setQuestionLimit] = useState(DEFAULT_QUESTION_LIMIT);
   const [remaining, setRemaining] = useState(DEFAULT_QUESTION_LIMIT);
   const [showOnboarding, setShowOnboarding] = useState(shouldShowOnboarding);
+  const [showTour, setShowTour] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -175,11 +177,25 @@ export default function App() {
 
   return (
     <div className="flex h-screen bg-surface">
-      {showOnboarding && <Onboarding onClose={() => setShowOnboarding(false)} />}
+      {showOnboarding && (
+        <Onboarding
+          onClose={() => {
+            setShowOnboarding(false);
+            // The overview says WHAT; the tour shows WHERE. Running them in
+            // sequence avoids two overlays competing for the same screen.
+            if (shouldShowTour()) setTimeout(() => setShowTour(true), 250);
+          }}
+        />
+      )}
+      {showTour && <Tour onClose={() => setShowTour(false)} />}
       <Sidebar
         corpus={corpus} conversations={conversations} activeId={conversationId}
         onExample={send} onNew={newConversation} onOpen={openConversation}
         onDelete={removeConversation}
+        onReplayTour={() => {
+          try { localStorage.removeItem("telecomrag.tour"); } catch { /* noop */ }
+          setShowTour(true);
+        }}
         onClearDocs={async () => {
           if (conversationId) {
             await fetch(`/api/v1/session/${conversationId}/documents`,

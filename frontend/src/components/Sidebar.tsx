@@ -11,6 +11,7 @@ const EXAMPLES = [
 
 export default function Sidebar({
   corpus, conversations, activeId, onExample, onNew, onOpen, onDelete, onClearDocs,
+  onReplayTour,
 }: {
   corpus: CorpusInfo | null;
   conversations: ConversationSummary[];
@@ -20,6 +21,7 @@ export default function Sidebar({
   onOpen: (id: string) => void;
   onDelete: (id: string) => void;
   onClearDocs: () => void;
+  onReplayTour: () => void;
 }) {
   return (
     <aside className="hidden w-[19rem] shrink-0 flex-col border-r border-border bg-surface-subtle lg:flex">
@@ -34,7 +36,7 @@ export default function Sidebar({
           Grounded question answering over 3GPP specifications. Every claim
           cites a clause; unsupported answers are refused.
         </p>
-        <button onClick={onNew}
+        <button onClick={onNew} data-tour="new-conversation"
           className="mt-3 flex w-full items-center justify-center gap-1.5 rounded-lg border border-border-strong bg-surface px-3 py-2 text-sm font-semibold text-ink shadow-soft hover:bg-surface-sunken">
           <Plus size={14} /> New conversation
         </button>
@@ -73,7 +75,7 @@ export default function Sidebar({
           </p>
         )}
 
-        <section>
+        <section data-tour="corpus">
           <div className="flex items-center gap-1.5 text-micro font-semibold uppercase tracking-wide text-ink-faint">
             <Database size={11} /> Indexed corpus
           </div>
@@ -120,7 +122,7 @@ export default function Sidebar({
           </section>
         )}
 
-        <section className="mt-6">
+        <section className="mt-6" data-tour="examples">
           <div className="text-micro font-semibold uppercase tracking-wide text-ink-faint">
             Try
           </div>
@@ -145,6 +147,12 @@ export default function Sidebar({
       </div>
 
       <div className="border-t border-border px-5 py-3">
+        <button
+          onClick={onReplayTour}
+          className="mb-2 block text-micro text-ink-faint hover:text-brand-text"
+        >
+          Show me around again
+        </button>
         <a href="https://github.com/uditnegi16/telecom-rag" target="_blank" rel="noreferrer"
           className="text-micro text-ink-faint hover:text-brand-text">
           Source, evaluation results and design docs on GitHub →

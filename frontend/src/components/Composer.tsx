@@ -59,6 +59,7 @@ export default function Composer({
           <button
             onClick={() => fileRef.current?.click()}
             disabled={uploading || disabled}
+            data-tour="upload"
             title="Upload a specification PDF"
             className="shrink-0 rounded-lg p-2 text-ink-faint hover:bg-surface-sunken hover:text-ink-muted disabled:opacity-40"
           >
@@ -73,6 +74,7 @@ export default function Composer({
             }} />
 
           <textarea
+            data-tour="composer"
             ref={taRef} rows={1} value={value} disabled={disabled}
             placeholder={disabled ? "Question limit reached for this demo"
                                   : "Ask about the indexed specifications…"}
@@ -91,6 +93,7 @@ export default function Composer({
             <button
               onClick={speech.toggle}
               disabled={disabled}
+              data-tour="mic"
               title={speech.listening ? "Stop listening" : "Ask by voice"}
               className={clsx(
                 "shrink-0 rounded-lg p-2 disabled:opacity-40",
