@@ -40,17 +40,86 @@ What each change actually did to the numbers. This file becomes the **ablation t
 
 ---
 
-## Ablation summary (fill as you go — this table goes in the README)
+## What was actually executed
 
-| Run | Change | Recall@10 | Halluc. ↓ | Citation ✓ | Abstain ✓ | False refuse ↓ | p95 | Verdict |
-|---|---|---|---|---|---|---|---|---|
-| RUN-001 | Baseline: fixed 512 chunks, dense-only, plain prompt | | | | | | | — |
-| RUN-002 | + clause-aware chunking (D-003) | | | | | | | |
-| RUN-003 | + BM25 hybrid, RRF (D-006) | | | | | | | |
-| RUN-004 | + cross-encoder rerank (D-007) | | | | | | | |
-| RUN-005 | + citation-enforcing prompt & structured output | | | | | | | |
-| RUN-006 | + abstention gate, τ swept (D-009) | | | | | | | |
-| RUN-007 | + groundedness verifier (D-010) | | | | | | | |
+Two of the seven planned runs were completed. Recording that plainly, because
+an ablation table with invented rows would be worse than an incomplete one.
+
+| Run | Status | Result |
+|---|---|---|
+| RUN-001 | **executed** — full set, 70B generator | 17/47 answered · 30/47 abstained · recall@3 91.5% · 20/20 adversarial abstained |
+| RUN-006 | **executed** — τ sweep, retrieval only, zero tokens | optimum τ=0.90 · J=0.939 · 46/47 answered · 2.1% false refusal · 96% abstention correctness |
+| RUN-002…005, 007 | **not executed** | Ran out of budget and time. Each is a flag change to `eval/run_eval.py` and ~15 minutes. |
+
+**RUN-001 is not comparable to current behaviour.** It was measured on
+`llama-3.3-70b-versatile`, dropped afterwards for its 1000-requests/day cap
+(D-027), and before six defects were fixed — most importantly E-016, where
+correct citations were rejected because the model copied the square brackets
+from the prompt's own source labels. That single bug caused the majority of
+those 30 abstentions.
+
+---
+
+## RUN-001 — baseline (executed 14 Aug, 70B generator)
+
+| Metric | Value |
+|---|---|
+| Answered | 17 / 47 |
+| Abstained | 30 / 47 (64%) |
+| Recall@3 (gold clause in context) | 43 / 47 = **91.5%** |
+| Adversarial abstention | 20 / 20 = **100%** |
+| Ungrounded-claim rate | unmeasured — run used `--no-verify` (E-012) |
+
+**The finding that redirected the project.** Textbook naive RAG over-answers:
+it invents responses to unanswerable questions and the work is driving
+hallucination down. This did the opposite. Retrieval put the gold clause in
+context 91.5% of the time and the system refused anyway, while abstaining on
+100% of adversarial questions *before any abstention gate existed*.
+
+Diagnosis took three attempts and two were wrong:
+
+1. **Thought it was τ.** It was not — at the then-current τ=0.35 every
+   answerable question passed the gate.
+2. **Thought it was the prompt.** Partly: rules 1 and 5 told the model to
+   refuse unless the sources were complete. Rebalanced in v3, which helped.
+3. **It was E-016.** Citations were rejected as fabricated because the model
+   returned `[TS28552_5.5.7.1.3]` — copying the bracket format from the
+   prompt's own source labels — and the validator compared exactly. Under the
+   fail-closed design that routes straight to abstention, so **a correct,
+   well-grounded answer was silently discarded**.
+
+---
+
+## RUN-006 — τ sweep (executed 14 Aug, retrieval only, zero API tokens)
+
+| τ | Answered (of 47) | False refusal | Correct abstention | Separation (J) |
+|---|---|---|---|---|
+| 0.35 | 47 | 0.0% | 76.0% | 0.760 |
+| 0.50 | 46 | 2.1% | 84.0% | 0.819 |
+| 0.75 | 46 | 2.1% | 92.0% | 0.899 |
+| **0.90** | **46** | **2.1%** | **96.0%** | **0.939** |
+| 0.95 | 43 | 8.5% | 96.0% | 0.875 |
+
+Score distributions: answerable median **0.996**, adversarial median **0.029**.
+Clean separation — better than expected from a cross-encoder trained on MS
+MARCO web passages and applied to specification text.
+
+**Operating point: τ = 0.90**, chosen deliberately. For a service-assurance
+assistant a wrong answer about alarm semantics during an outage costs a NOC
+engineer more than a refusal, so the system is tuned to fail closed and the
+2.1% false-refusal cost is accepted.
+
+**Five of 25 adversarial questions score above 0.6** — they use real-looking
+identifiers such as an invented `TS 28.599`. No threshold catches those; they
+are caught by citation validation and entailment verification. That is the
+defence-in-depth argument with the overlap measured rather than asserted.
+
+**The sequencing lesson.** This sweep is retrieval-only — embeddings, BM25 and
+the cross-encoder all run locally — so it costs **zero API tokens** and about
+two minutes. It was scheduled last, after the generation runs that consumed
+the entire daily budget. The cheapest and most decisive measurement in the
+project ran after the expensive ones. Order experiments by
+information-per-cost, not by position in the pipeline.
 | RUN-008 | + query rewrite / retry edge (D-008) | | | | | | | |
 
 ---
