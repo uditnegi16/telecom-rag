@@ -260,3 +260,19 @@ reuse audit and the Groq free-tier constraint analysis.
 - **Rationale:** E-026 was caused precisely by this — `/upload` still imported the superseded in-memory session store while `/chat` had moved to SQLite, so uploads were tagged with one identifier and retrieval filtered on another. The dead path compiled, imported and ran; it simply operated on a parallel universe of ids. **Code that is importable is code that can be imported by mistake.**
 - **Rejected alternatives:** Keep for reference — that is what version control is for. Mark deprecated with a warning — warnings are ignored, and the failure mode here was silent rather than noisy.
 - **Consequences:** The Streamlit prototype is gone. It served its purpose during development and its removal is recorded in `REUSE_AUDIT.md` rather than left as a puzzle in the tree.
+
+
+### D-032 — HTTPS via Caddy and sslip.io rather than a purchased domain
+- **Status:** DECIDED · 2026-08-15
+- **Context:** The demo was served over plain HTTP on an EC2 IP. Browsers label that "Not secure", which is the first thing a reviewer sees. It also broke two features: `crypto.randomUUID` is unavailable outside a secure context (E-032), and the Web Speech API refuses microphone access.
+- **Decision:** Caddy on the instance, terminating TLS for `15-206-59-248.sslip.io`. sslip.io resolves any dash-separated IP hostname to that IP, so no domain purchase was needed. Certificates are issued and renewed automatically by Let's Encrypt.
+- **Rationale:** Fifteen minutes and zero cost, against an Application Load Balancer at roughly ₹1,400/month or the delay of registering and configuring a domain. The security-context features started working as a direct consequence.
+- **Rejected alternatives:** ALB + ACM — costs more than the instance it fronts. Self-signed certificate — a browser warning is worse than no padlock. Buy a domain — better, and the right long-term answer, but not on a submission deadline.
+- **Consequences:** The hostname is unmemorable and depends on a third-party DNS service. Because the hostname *embeds the IP*, an Elastic IP became mandatory — a changed address would invalidate the certificate. The web container was rebound to `127.0.0.1:8080` so nothing can bypass Caddy.
+
+### D-033 — Onboarding: an overview modal, then a spotlight tour
+- **Status:** DECIDED · 2026-08-15
+- **Context:** A first-time visitor sees a chat box and must infer that the paperclip indexes their own specifications, that refusals are deliberate rather than broken, and that the evidence panel is the point of the interface. Those are exactly the things most likely to be misread as faults.
+- **Decision:** Two sequential layers. A modal explains *what* the system does (verified claims, deliberate refusals, upload, visible query rewriting); a spotlight tour then shows *where* those controls are, highlighting real elements.
+- **Rationale:** The two answer different questions and compete for attention if shown together. Separating them keeps each short.
+- **Implementation notes worth keeping:** targets are located by `data-tour` attribute and measured with `getBoundingClientRect` at runtime, so the tour cannot drift out of sync with the layout. Targets that measure zero — the sidebar below the `lg` breakpoint — are **skipped**, not pointed at, so a phone does not get tooltips anchored to nothing. Both layers record dismissal in `localStorage`, and the sidebar carries a "Show me around again" control, because a one-time tour becomes unfindable the moment it is dismissed by accident.

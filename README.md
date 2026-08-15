@@ -7,6 +7,8 @@ rather than guesses** when the corpus does not contain the answer.
 Submitted for the Mavenir Graduate Engineer Trainee (AI/LLM Engineer, MavAI
 OPS) technical assignment.
 
+**Live demo — [https://15-206-59-248.sslip.io](https://15-206-59-248.sslip.io)**
+
 > **On "zero hallucination".** This system does not claim zero hallucination,
 > and I do not believe that is provable for a generative model over open-ended
 > input. It claims something narrower and verifiable: **fail-closed and
@@ -221,7 +223,9 @@ function.
 |---|---|---|
 | EC2 t3.small (ap-south-1) | `i-04f8f50c5b7d0f54e` | $0.0224/hr running · $0 stopped |
 | 20 GB gp3 volume | attached | ~$1.60/month, billed even when stopped |
-| Elastic IP | if attached | free while attached to a **running** instance |
+| Elastic IP `15.206.59.248` | `eipalloc-0efd47e9d8366eca8` | free while attached to a **running** instance |
+| Security group | `sg-0723163f90683e08a` | free |
+| Key pair | `telecom-rag` | free |
 
 Billing depends on the instance being *running*, not on traffic. Roughly $16
 per month if left on continuously.
@@ -242,9 +246,9 @@ aws ec2 describe-instances --region ap-south-1 \
   --query "Reservations[0].Instances[0].PublicIpAddress" --output text
 ```
 
-**The public IP changes on every stop/start** unless an Elastic IP is attached.
-An Elastic IP that is *not* attached to a running instance is charged, so a
-stopped instance with one attached costs slightly more than one without.
+An Elastic IP (`15.206.59.248`) is attached, so the address survives a
+stop/start. Note that an Elastic IP is only free while attached to a
+**running** instance — a stopped instance with one attached is billed for it.
 
 ### Terminate (permanent — deletes the instance and its disk)
 
@@ -370,11 +374,11 @@ Stated here rather than left to be discovered.
    through to fixed-window splitting, so retrieval and verification still work
    but citations lose clause-level precision and read as
    `filename_fallback_7`. The upload response says so explicitly.
-8. **No HTTPS on the demo.** The deployment is plain HTTP on an EC2 IP.
-   Browser APIs restricted to secure contexts are therefore unavailable —
-   voice input hides itself, and `crypto.randomUUID` needed a fallback
-   (E-032). A domain plus Caddy would fix this in about fifteen minutes; it
-   was descoped for the submission deadline.
+8. **HTTPS via a shared DNS service.** The demo is served over TLS by Caddy,
+   using a `sslip.io` hostname that resolves to the instance's Elastic IP.
+   That avoided buying a domain, at the cost of an unmemorable hostname and a
+   dependency on a third-party DNS service. A real domain would be a
+   fifteen-minute change to the Caddyfile.
 
 ---
 
